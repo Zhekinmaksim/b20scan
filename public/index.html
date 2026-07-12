@@ -92,10 +92,12 @@ tr.row{cursor:pointer}
 tr.row:hover td{background:var(--panel)}
 .sym{font-weight:600}
 .name{color:var(--slate);font-size:12px}
-.addr{display:inline-flex;align-items:stretch;font-size:12px;cursor:copy}
+.addr{display:inline-flex;align-items:stretch;font-size:12px;cursor:pointer}
 .addr .pfx{background:var(--blue);color:#fff;padding:2px 6px;font-weight:600}
 .addr .rest{border:1px solid var(--line);border-left:0;padding:2px 6px;color:var(--slate)}
-.addr.copied .rest{color:var(--blue);border-color:var(--blue)}
+.addr:hover .rest{color:var(--blue);border-color:var(--blue)}
+.bslink{color:var(--blue)}
+.bslink:hover{text-decoration:underline}
 .chip{display:inline-block;font-size:10px;font-weight:600;padding:3px 8px;letter-spacing:.04em}
 .chip.a{background:var(--blue-wash);color:var(--blue-dark)}
 .chip.s{background:var(--ink);color:#fff}
@@ -124,6 +126,11 @@ tr.row:hover td{background:var(--panel)}
 .dh .t{font-family:var(--disp);font-weight:700;font-size:22px}
 .dh .x{margin-left:auto;cursor:pointer;border:1px solid var(--line);background:#fff;padding:4px 9px;font-size:14px;color:var(--slate)}
 .dh .x:hover{border-color:var(--ink);color:var(--ink)}
+.dnav{display:flex;gap:8px;padding:10px 18px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+.dnav button{border:1px solid var(--line);background:#fff;color:var(--slate);padding:6px 12px;font-size:11px;cursor:pointer}
+.dnav button.on{background:var(--ink);border-color:var(--ink);color:#fff}
+.pane{display:none}
+.pane.on{display:block}
 .dgrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}
 .dcol{padding:14px 18px}
 .dcol:nth-child(even){border-left:1px solid var(--line)}
@@ -196,10 +203,14 @@ footer a:hover{text-decoration:underline}
 
 <script>
 const $=s=>document.querySelector(s);
-let variant="", search="", known=new Set(), seenEv=new Set(), firstLoad=true, allTokens=[], currentRows=[], activeDetailAddr="";
+let variant="", search="", known=new Set(), seenEv=new Set(), firstLoad=true, allTokens=[], currentRows=[], activeDetailAddr="", activeDetailIndex=-1, activeDetailPane="overview";
 const tokenCache=new Map();
 
-const fmtAddr=a=>`<span class="addr" data-a="${a}" title="click to copy"><span class="pfx">${a.slice(0,6)}</span><span class="rest">${a.slice(6,14)}…${a.slice(-6)}</span></span>`;
+const BASESCAN="https://basescan.org";
+const fmtAddr=a=>`<a class="addr bslink" href="${BASESCAN}/address/${a}" target="_blank" rel="noopener noreferrer" title="open on BaseScan"><span class="pfx">${a.slice(0,6)}</span><span class="rest">${a.slice(6,14)}…${a.slice(-6)}</span></a>`;
+const shortAddr=a=>a?`${a.slice(0,6)}…${a.slice(-4)}`:"—";
+const addrLink=a=>a?`<a class="bslink" href="${BASESCAN}/address/${a}" target="_blank" rel="noopener noreferrer">${shortAddr(a)}</a>`:"—";
+const txLink=tx=>tx?`<a class="bslink" href="${BASESCAN}/tx/${tx}" target="_blank" rel="noopener noreferrer">${tx.slice(0,10)}…${tx.slice(-6)}</a>`:"—";
 const fmtAge=ts=>{const s=Math.max(1,(Date.now()/1e3|0)-ts);if(s<60)return s+"s";if(s<3600)return (s/60|0)+"m";if(s<86400)return (s/3600|0)+"h";return (s/86400|0)+"d"};
 const fmtN=n=>Number(n).toLocaleString("en-US");
 const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
@@ -251,11 +262,38 @@ async function loadDeploys(){
 async function loadTokens(){
   const p=new URLSearchParams();if(variant)p.set("variant",variant);if(search)p.set("q",search);
   const list=await (await fetch("/api/tokens?"+p)).json();
-  currentRows=list;
+  const detailTop=detailViewportTop();
+  list.forEach(t=>tokenCache.set(t.address.toLowerCase(),{...(tokenCache.get(t.address.toLowerCase())||{}),...t}));
+  currentRows=pinActiveRow(list);
   if(!variant&&!search){allTokens=list;renderTicker(list)}
   $("#empty").hidden=list.length>0;
   renderRows();
-  list.forEach(t=>{known.add(t.address);tokenCache.set(t.address.toLowerCase(),{...(tokenCache.get(t.address.toLowerCase())||{}),...t})});firstLoad=false;
+  restoreDetailViewportTop(detailTop);
+  list.forEach(t=>known.add(t.address));firstLoad=false;
+}
+
+function pinActiveRow(list){
+  if(!activeDetailAddr)return list;
+  const idx=list.findIndex(t=>t.address.toLowerCase()===activeDetailAddr);
+  if(idx>=0){activeDetailIndex=idx;return list}
+  const active=tokenCache.get(activeDetailAddr);
+  if(!active)return list;
+  const copy=list.slice();
+  const at=Math.min(Math.max(activeDetailIndex,0),copy.length);
+  copy.splice(at,0,active);
+  return copy;
+}
+
+function detailViewportTop(){
+  return activeDetailAddr?document.querySelector("tr.detail-row")?.getBoundingClientRect().top:null;
+}
+
+function restoreDetailViewportTop(prevTop){
+  if(prevTop==null)return;
+  const nextTop=document.querySelector("tr.detail-row")?.getBoundingClientRect().top;
+  if(nextTop==null)return;
+  const delta=nextTop-prevTop;
+  if(Math.abs(delta)>1)window.scrollBy(0,delta);
 }
 
 function renderRows(){
@@ -300,7 +338,9 @@ function feedLine(e){
 async function openToken(addr){
   const nextAddr=addr.toLowerCase();
   if(activeDetailAddr===nextAddr && tokenCache.get(nextAddr)?.events){closeDetail();return}
+  if(activeDetailAddr!==nextAddr)activeDetailPane="overview";
   activeDetailAddr=nextAddr;
+  activeDetailIndex=currentRows.findIndex(t=>t.address.toLowerCase()===activeDetailAddr);
   const cached=tokenCache.get(activeDetailAddr);
   if(cached){tokenCache.set(activeDetailAddr,{...cached,events:cached.events||null,holders:cached.holders||null});renderRows()}
   try{
@@ -343,62 +383,91 @@ function detailHtml(t,loading){
   const uri=/^(https?:\/\/|ipfs:\/\/)/i.test(live.contract_uri||"")?live.contract_uri:null;
   const memo=controls.memo||(t.events||[]).find(e=>e.kind==="Memo")?.args?.memo;
   const currency=live.currency||t.currency;
+  const paneButton=p=>`<button type="button" class="${activeDetailPane===p?"on":""}" onclick="setDetailPane(event,'${p}')">${p}</button>`;
+  const pane=(p,html)=>`<div class="pane ${activeDetailPane===p?"on":""}">${html}</div>`;
   return `<div class="detail">
     <div class="dh">
       <span class="t">$${esc(liveSymbol)}</span><span class="name">${esc(liveName)} · issuer controls</span>
       ${t.variant===0?'<span class="chip a">ASSET</span>':'<span class="chip s">STABLE'+(currency?" · "+esc(currency):"")+'</span>'}
       <button class="x" type="button" onclick="closeDetail(event)">close</button>
     </div>
-    <div class="dgrid">
-      <div class="dcol">
-        <h3>B20SCAN state</h3>
-        <div class="kv"><b>address</b>${fmtAddr(t.address)}</div>
-        <div class="kv"><b>type</b><span>B20 · native precompile</span></div>
-        <div class="kv"><b>transfers</b><span>${fmtN(t.transfer_count)}</span></div>
-        <div class="kv"><b>memo</b><span>${memo?esc(memo):"—"}</span></div>
-        <div class="kv"><b>variant</b><span>${t.variant===0?"ASSET":"STABLECOIN"}${currency?" · "+esc(currency):""}</span></div>
-        <div class="kv"><b>issuer roles</b><span>${roleLabels.length?esc(roleLabels.join(" / ")):"—"}</span></div>
-        <div class="kv"><b>supply cap</b><span>${capH}</span></div>
-        <div class="kv"><b>policy state</b><span>${policyValues.length?policyValues.map(v=>"#"+esc(v)).join(" / "):"none"}</span></div>
-      </div>
-      <div class="dcol">
-        <h3>token</h3>
-        <div class="kv"><b>created</b><span>block ${fmtN(t.block)} · ${fmtAge(t.ts)} ago</span></div>
-        <div class="kv"><b>decimals</b><span>${decimals}</span></div>
-        <div class="kv"><b>supply</b><span>${supplyH}</span></div>
-        <div class="kv"><b>headroom</b><span>${headroom}</span></div>
-        ${currency?`<div class="kv"><b>stablecoin currency</b><span>${esc(currency)}</span></div>`:""}
-        ${multiplier?`<div class="kv"><b>multiplier</b><span>${esc(multiplier)}</span></div>`:""}
-        ${uri?`<div class="kv"><b>contract URI</b><a class="uri" href="${esc(uri)}" target="_blank" rel="noopener noreferrer">${esc(uri)}</a></div>`:""}
-        <div class="kv"><b>holders</b><span>${fmtN(t.holder_count)}</span></div>
-        <div class="kv"><b>chain read</b><span>${live.fetched_at?"live · "+fmtAge(live.fetched_at)+" ago":loading?"loading":"indexed"}</span></div>
-      </div>
-      <div class="dcol">
-        <h3>roles</h3>
-        ${roleLabels.map(k=>`<div class="kv"><b>${esc(k)}</b><span>${roles[k].map(esc).join(" / ")}</span></div>`).join("")||(loading?'<div class="name">loading</div>':'<div class="name">none decoded yet</div>')}
-        <h3 style="margin-top:14px">state</h3>
-        <div class="kv"><b>transfers</b><span>${paused.includes("transfers")?"paused":"active"}</span></div>
-        <div class="kv"><b>mint</b><span>${paused.includes("mint")?"paused":"active"}</span></div>
-        <div class="kv"><b>paused features</b><span>${paused.length?paused.map(esc).join(" / "):"none"}</span></div>
-      </div>
+    <div class="dnav">${paneButton("overview")}${paneButton("controls")}${paneButton("activity")}</div>
+    ${pane("overview",`
+      <div class="dgrid">
+        <div class="dcol">
+          <h3>B20SCAN state</h3>
+          <div class="kv"><b>address</b>${fmtAddr(t.address)}</div>
+          <div class="kv"><b>type</b><span>B20 · native precompile</span></div>
+          <div class="kv"><b>transfers</b><span>${fmtN(t.transfer_count)}</span></div>
+          <div class="kv"><b>memo</b><span>${memo?esc(memo):"—"}</span></div>
+          <div class="kv"><b>variant</b><span>${t.variant===0?"ASSET":"STABLECOIN"}${currency?" · "+esc(currency):""}</span></div>
+          <div class="kv"><b>issuer roles</b><span>${roleLabels.length?esc(roleLabels.join(" / ")):"—"}</span></div>
+          <div class="kv"><b>supply cap</b><span>${capH}</span></div>
+          <div class="kv"><b>policy state</b><span>${policyValues.length?policyValues.map(v=>"#"+esc(v)).join(" / "):"none"}</span></div>
+        </div>
+        <div class="dcol">
+          <h3>token</h3>
+          <div class="kv"><b>created</b><span>block ${fmtN(t.block)} · ${fmtAge(t.ts)} ago</span></div>
+          <div class="kv"><b>deploy tx</b><span>${txLink(t.tx)}</span></div>
+          <div class="kv"><b>decimals</b><span>${decimals}</span></div>
+          <div class="kv"><b>supply</b><span>${supplyH}</span></div>
+          <div class="kv"><b>headroom</b><span>${headroom}</span></div>
+          ${currency?`<div class="kv"><b>stablecoin currency</b><span>${esc(currency)}</span></div>`:""}
+          ${multiplier?`<div class="kv"><b>multiplier</b><span>${esc(multiplier)}</span></div>`:""}
+          ${uri?`<div class="kv"><b>contract URI</b><a class="uri" href="${esc(uri)}" target="_blank" rel="noopener noreferrer">${esc(uri)}</a></div>`:""}
+          <div class="kv"><b>holders</b><span>${fmtN(t.holder_count)}</span></div>
+          <div class="kv"><b>chain read</b><span>${live.fetched_at?"live · "+fmtAge(live.fetched_at)+" ago":loading?"loading":"indexed"}</span></div>
+        </div>
+      </div>`)}
+    ${pane("controls",`
+      <div class="dgrid">
+        <div class="dcol">
+          <h3>roles</h3>
+          ${roleLabels.map(k=>`<div class="kv"><b>${esc(k)}</b><span>${roles[k].map(addrLink).join(" / ")}</span></div>`).join("")||(loading?'<div class="name">loading</div>':'<div class="name">none decoded yet</div>')}
+        </div>
+        <div class="dcol">
+          <h3>supply</h3>
+          <div class="kv"><b>cap</b><span>${capH}</span></div>
+          <div class="kv"><b>minted</b><span>${supplyH}</span></div>
+          <div class="kv"><b>headroom</b><span>${headroom}</span></div>
+        </div>
+        <div class="dcol">
+          <h3>state</h3>
+          <div class="kv"><b>transfers</b><span>${paused.includes("transfers")?"paused":"active"}</span></div>
+          <div class="kv"><b>mint</b><span>${paused.includes("mint")?"paused":"active"}</span></div>
+          <div class="kv"><b>paused features</b><span>${paused.length?paused.map(esc).join(" / "):"none"}</span></div>
+        </div>
+        <div class="dcol">
+          <h3>policy</h3>
+          <div class="kv"><b>transfer policy</b><span>${policyValues.length?policyValues.map(v=>"#"+esc(v)).join(" / "):"none"}</span></div>
+          ${currency?`<div class="kv"><b>currency</b><span>${esc(currency)}</span></div>`:""}
+        </div>
+      </div>`)}
+    ${pane("activity",`
       <div class="dcol">
         <h3>activity</h3>
-        ${(t.events||[]).slice(0,12).map(e=>`<div class="ev"><span class="k">${e.kind}</span><span class="d">${esc(evSummary(e,t))}</span><span class="age">${fmtAge(e.ts)}</span></div>`).join("")||(loading?'<div class="name">loading</div>':'<div class="name">none yet</div>')}
-      </div>
-    </div></div>`;
+        ${(t.events||[]).slice(0,30).map(e=>eventHtml(e,t)).join("")||(loading?'<div class="name">loading</div>':'<div class="name">none yet</div>')}
+      </div>`)}
+  </div>`;
 }
-function closeDetail(e){e?.stopPropagation();activeDetailAddr="";renderRows()}
+function closeDetail(e){e?.stopPropagation();activeDetailAddr="";activeDetailIndex=-1;renderRows()}
+function setDetailPane(e,pane){e?.stopPropagation();activeDetailPane=pane;renderRows()}
+function eventHtml(e,t){
+  return `<div class="ev"><span class="k">${e.kind}</span><span class="d">${evSummary(e,t)}</span><span class="age">${txLink(e.tx)} · ${fmtAge(e.ts)}</span></div>`;
+}
 function evSummary(e,t){
   const a=e.args,d=BigInt(10)**BigInt(t.live?.decimals??t.decimals??0);
-  if(e.kind==="Transfer")return `${a.from.slice(0,8)} → ${a.to.slice(0,8)} · ${(BigInt(a.amount)/d).toLocaleString("en-US")}`;
-  if(e.kind==="Memo")return a.memo;
+  if(e.kind==="Transfer")return `${addrLink(a.from)} → ${addrLink(a.to)} · ${(BigInt(a.amount)/d).toLocaleString("en-US")}`;
+  if(e.kind==="Memo")return esc(a.memo);
   if(e.kind==="SupplyCapUpdated")return `cap → ${(BigInt(a.newSupplyCap)/d).toLocaleString("en-US")}`;
-  if(e.kind==="RoleGranted")return `${a.role.slice(0,10)} → ${a.account.slice(0,10)}`;
-  return JSON.stringify(a).slice(0,80);
+  if(e.kind==="RoleGranted")return `${esc(a.role.slice(0,10))} → ${addrLink(a.account)}`;
+  return esc(JSON.stringify(a).slice(0,80));
 }
 
 /* copy address on click (event delegation, stops row navigation) */
 document.addEventListener("click",e=>{
+  const link=e.target.closest(".bslink");
+  if(link){e.stopPropagation();return}
   const el=e.target.closest(".addr");
   if(!el)return;
   e.stopPropagation();

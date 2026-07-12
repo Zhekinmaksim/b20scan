@@ -54,10 +54,6 @@ function roleName(role) {
   return ROLE_NAMES.get(String(role).toLowerCase()) || `${String(role).slice(0, 10)}...`;
 }
 
-function shortAddr(addr) {
-  return addr ? `${addr.slice(0, 6)}...${addr.slice(-4)}` : "-";
-}
-
 function withTimeout(promise, ms) {
   return Promise.race([
     promise,
@@ -186,7 +182,7 @@ function controlsFor(address, tokenRow) {
   return {
     roles: Object.fromEntries(
       Object.entries(roles)
-        .map(([label, accounts]) => [label, [...accounts].map(shortAddr)])
+        .map(([label, accounts]) => [label, [...accounts]])
         .filter(([, accounts]) => accounts.length)
     ),
     paused: [...paused],
