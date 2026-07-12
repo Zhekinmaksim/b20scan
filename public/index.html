@@ -203,7 +203,7 @@ footer a:hover{text-decoration:underline}
 
 <script>
 const $=s=>document.querySelector(s);
-let variant="", search="", known=new Set(), seenEv=new Set(), firstLoad=true, allTokens=[], currentRows=[], activeDetailAddr="", activeDetailIndex=-1, activeDetailPane="overview";
+let variant="", search="", known=new Set(), seenEv=new Set(), firstLoad=true, allTokens=[], currentRows=[], activeDetailAddr="", activeDetailIndex=-1, activeDetailPane="overview", activeEventPage=0;
 const tokenCache=new Map();
 
 const BASESCAN="https://basescan.org";
@@ -211,6 +211,7 @@ const fmtAddr=a=>`<a class="addr bslink" href="${BASESCAN}/address/${a}" target=
 const shortAddr=a=>a?`${a.slice(0,6)}…${a.slice(-4)}`:"—";
 const addrLink=a=>a?`<a class="bslink" href="${BASESCAN}/address/${a}" target="_blank" rel="noopener noreferrer">${shortAddr(a)}</a>`:"—";
 const txLink=tx=>tx?`<a class="bslink" href="${BASESCAN}/tx/${tx}" target="_blank" rel="noopener noreferrer">${tx.slice(0,10)}…${tx.slice(-6)}</a>`:"—";
+const blockLink=b=>b?`<a class="bslink" href="${BASESCAN}/block/${b}" target="_blank" rel="noopener noreferrer">${fmtN(b)}</a>`:"—";
 const fmtAge=ts=>{const s=Math.max(1,(Date.now()/1e3|0)-ts);if(s<60)return s+"s";if(s<3600)return (s/60|0)+"m";if(s<86400)return (s/3600|0)+"h";return (s/86400|0)+"d"};
 const fmtN=n=>Number(n).toLocaleString("en-US");
 const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
@@ -319,7 +320,7 @@ async function loadFeed(){
   $("#feed").innerHTML=feed.map(e=>{
     const id=e.tx+":"+e.block+":"+e.kind;
     const isNew=!firstLoad&&!seenEv.has(id);seenEv.add(id);
-    return `<div class="fi ${isNew?"slide":""}" onclick="openToken('${e.token}')">
+    return `<div class="fi ${isNew?"slide":""}" onclick='openFromFeed(${JSON.stringify(e).replace(/'/g,"&#39;")})'>
       <span class="fk ${e.kind==="Memo"?"memo":""}">${e.kind}</span>
       <span class="ft">$${esc(e.symbol)} · ${fmtAge(e.ts)}</span>
       <span class="fd">${esc(feedLine(e))}</span>
@@ -335,18 +336,45 @@ function feedLine(e){
   return e.kind;
 }
 
-async function openToken(addr){
+function paneForEvent(kind){
+  if(kind==="RoleGranted"||kind==="RoleRevoked"||kind==="SupplyCapUpdated"||kind==="Paused"||kind==="Unpaused"||kind==="PolicyUpdated")return "controls";
+  if(kind==="Transfer"||kind==="Memo"||kind==="BurnedBlocked")return "activity";
+  return "overview";
+}
+
+function seedFromFeed(e){
+  return {
+    address:e.token,name:e.symbol||"loading",symbol:e.symbol||"B20",variant:0,currency:null,
+    decimals:18,block:e.block,tx:e.tx,ts:e.ts,total_supply:"0",holder_count:0,transfer_count:0,
+    live:null,events:[{kind:e.kind,block:e.block,tx:e.tx,ts:e.ts,args:e.args}],holders:[],
+    controls:{roles:{},paused:[],policy:{},memo:e.kind==="Memo"?e.args.memo:null,supply_cap:null},
+  };
+}
+
+function openFromFeed(e){
+  openToken(e.token,paneForEvent(e.kind),seedFromFeed(e));
+}
+
+async function openToken(addr,pane=null,seed=null){
   const nextAddr=addr.toLowerCase();
-  if(activeDetailAddr===nextAddr && tokenCache.get(nextAddr)?.events){closeDetail();return}
-  if(activeDetailAddr!==nextAddr)activeDetailPane="overview";
+  if(activeDetailAddr===nextAddr && tokenCache.get(nextAddr)?.events && pane===null){closeDetail();return}
+  if(activeDetailAddr!==nextAddr){activeDetailPane=pane||"overview";activeEventPage=0}
+  else if(pane){activeDetailPane=pane;activeEventPage=0}
   activeDetailAddr=nextAddr;
   activeDetailIndex=currentRows.findIndex(t=>t.address.toLowerCase()===activeDetailAddr);
+  if(activeDetailIndex<0)activeDetailIndex=0;
+  if(seed)tokenCache.set(activeDetailAddr,{...(tokenCache.get(activeDetailAddr)||{}),...seed});
   const cached=tokenCache.get(activeDetailAddr);
-  if(cached){tokenCache.set(activeDetailAddr,{...cached,events:cached.events||null,holders:cached.holders||null});renderRows()}
+  if(cached){
+    tokenCache.set(activeDetailAddr,{...cached,events:cached.events||null,holders:cached.holders||null});
+    currentRows=pinActiveRow(currentRows);
+    renderRows();
+  }
   try{
     const t=await (await fetch("/api/tokens/"+addr)).json();
     tokenCache.set(t.address.toLowerCase(),t);
     if(activeDetailAddr!==t.address.toLowerCase())return;
+    currentRows=pinActiveRow(currentRows);
     renderRows();
     fetchLive(t.address,t);
   }catch{
@@ -407,7 +435,7 @@ function detailHtml(t,loading){
         </div>
         <div class="dcol">
           <h3>token</h3>
-          <div class="kv"><b>created</b><span>block ${fmtN(t.block)} · ${fmtAge(t.ts)} ago</span></div>
+          <div class="kv"><b>created</b><span>block ${blockLink(t.block)} · ${fmtAge(t.ts)} ago</span></div>
           <div class="kv"><b>deploy tx</b><span>${txLink(t.tx)}</span></div>
           <div class="kv"><b>decimals</b><span>${decimals}</span></div>
           <div class="kv"><b>supply</b><span>${supplyH}</span></div>
@@ -446,12 +474,23 @@ function detailHtml(t,loading){
     ${pane("activity",`
       <div class="dcol">
         <h3>activity</h3>
-        ${(t.events||[]).slice(0,30).map(e=>eventHtml(e,t)).join("")||(loading?'<div class="name">loading</div>':'<div class="name">none yet</div>')}
+        ${activityPageHtml(t,loading)}
       </div>`)}
   </div>`;
 }
 function closeDetail(e){e?.stopPropagation();activeDetailAddr="";activeDetailIndex=-1;renderRows()}
 function setDetailPane(e,pane){e?.stopPropagation();activeDetailPane=pane;renderRows()}
+function setEventPage(e,page){e?.stopPropagation();activeEventPage=page;renderRows()}
+function activityPageHtml(t,loading){
+  const events=t.events||[];
+  if(!events.length)return loading?'<div class="name">loading</div>':'<div class="name">none yet</div>';
+  const size=20,pages=Math.max(1,Math.ceil(events.length/size));
+  activeEventPage=Math.max(0,Math.min(activeEventPage,pages-1));
+  const start=activeEventPage*size;
+  const rows=events.slice(start,start+size).map(e=>eventHtml(e,t)).join("");
+  const nav=pages>1?`<div class="dnav">${Array.from({length:pages},(_,i)=>`<button type="button" class="${i===activeEventPage?"on":""}" onclick="setEventPage(event,${i})">${i+1}</button>`).join("")}</div>`:"";
+  return rows+nav;
+}
 function eventHtml(e,t){
   return `<div class="ev"><span class="k">${e.kind}</span><span class="d">${evSummary(e,t)}</span><span class="age">${txLink(e.tx)} · ${fmtAge(e.ts)}</span></div>`;
 }
