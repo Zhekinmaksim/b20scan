@@ -93,8 +93,8 @@ tr.row:hover td{background:var(--panel)}
 .sym{font-weight:600}
 .name{color:var(--slate);font-size:12px}
 .addr{display:inline-flex;align-items:stretch;font-size:12px;cursor:pointer}
-.addr .pfx{background:var(--blue);color:#fff;padding:2px 6px;font-weight:600}
-.addr .rest{border:1px solid var(--line);border-left:0;padding:2px 6px;color:var(--slate)}
+.addr .pfx{background:var(--blue);color:#fff;padding:2px 6px;font-weight:600;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.addr .rest{border:1px solid var(--line);border-left:0;padding:2px 6px;color:var(--slate);max-width:170px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .addr:hover .rest{color:var(--blue);border-color:var(--blue)}
 .bslink{color:var(--blue)}
 .bslink:hover{text-decoration:underline}
@@ -104,6 +104,15 @@ tr.row:hover td{background:var(--panel)}
 .num{text-align:right;font-variant-numeric:tabular-nums}
 .fresh td{animation:flash 1.8s ease-out}
 @keyframes flash{from{background:var(--blue-wash)}to{background:transparent}}
+.pager{display:flex;align-items:center;gap:6px;padding:16px 0 4px;flex-wrap:wrap}
+.pager .info{margin-right:auto;color:var(--slate);font-size:12px}
+.pager button{border:1px solid var(--line);background:#fff;color:var(--slate);padding:6px 10px;font-size:12px;cursor:pointer;min-width:34px}
+.pager button:hover:not(:disabled){border-color:var(--ink);color:var(--ink)}
+.pager button.on{background:var(--ink);border-color:var(--ink);color:#fff}
+.pager button:disabled{opacity:.45;cursor:default}
+.pager .dots{color:var(--slate);padding:0 4px}
+.pager.compact{padding:12px 0 0;justify-content:flex-end}
+.pager.compact .info{margin-right:auto}
 
 /* --- live feed rail --- */
 .rail{border:1px solid var(--line);position:sticky;top:16px;margin-top:18px}
@@ -140,11 +149,17 @@ tr.row:hover td{background:var(--panel)}
 .kv b{font-weight:500;color:var(--slate)}
 .kv span{text-align:right;overflow:hidden;text-overflow:ellipsis}
 .kv .uri{max-width:70%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--blue)}
-.ev{font-size:12px;padding:5px 0;border-bottom:1px dashed var(--line);display:grid;grid-template-columns:110px 1fr auto;gap:10px}
-.ev:last-child{border-bottom:0}
-.ev .k{color:var(--blue);font-weight:600}
-.ev .d{color:var(--slate);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.ev .age{color:var(--slate);text-align:right}
+.activity-card{padding:14px 18px}
+.activity-card h3{font-size:11px;color:var(--slate);font-weight:500;margin-bottom:8px}
+.atable{border-top:1px solid var(--line)}
+.arow{display:grid;grid-template-columns:110px minmax(110px,1fr) minmax(110px,1fr) minmax(90px,.7fr) minmax(140px,1.25fr) minmax(130px,.9fr);gap:12px;align-items:center;border-bottom:1px solid var(--line);font-size:12px;min-height:42px}
+.arow.head{min-height:34px;color:var(--slate);font-size:11px}
+.arow:not(.head):hover{background:var(--panel)}
+.arow.memo-row{background:var(--blue-wash)}
+.arow span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.arow .kind{font-weight:600;color:var(--blue)}
+.arow .amount,.arow .age{text-align:right}
+.arow .memo{color:var(--blue-dark)}
 .empty{padding:40px 10px;text-align:center;color:var(--slate);font-size:13px}
 footer{padding:26px 0 40px;color:var(--slate);font-size:11px;display:flex;gap:16px;flex-wrap:wrap}
 footer a{color:var(--blue);text-decoration:none}
@@ -186,6 +201,7 @@ footer a:hover{text-decoration:underline}
       <tbody id="rows"></tbody>
     </table>
     <div class="empty" id="empty" hidden>No tokens match. The indexer may still be backfilling.</div>
+    <div class="pager" id="pager"></div>
   </div>
 
   <aside class="rail">
@@ -205,11 +221,20 @@ footer a:hover{text-decoration:underline}
 const $=s=>document.querySelector(s);
 let variant="", search="", known=new Set(), seenEv=new Set(), firstLoad=true, allTokens=[], currentRows=[], activeDetailAddr="", activeDetailIndex=-1, activeDetailPane="overview", activeEventPage=0;
 const tokenCache=new Map();
+const nameCache=new Map(), nameChecked=new Set();
+let namesLoading=false, tokenPage=1, tokenPageSize=50, tokenTotal=0, latestFeed=[];
 
 const BASESCAN="https://basescan.org";
-const fmtAddr=a=>`<a class="addr bslink" href="${BASESCAN}/address/${a}" target="_blank" rel="noopener noreferrer" title="open on BaseScan"><span class="pfx">${a.slice(0,6)}</span><span class="rest">${a.slice(6,14)}…${a.slice(-6)}</span></a>`;
 const shortAddr=a=>a?`${a.slice(0,6)}…${a.slice(-4)}`:"—";
-const addrLink=a=>a?`<a class="bslink" href="${BASESCAN}/address/${a}" target="_blank" rel="noopener noreferrer">${shortAddr(a)}</a>`:"—";
+const trimLabel=s=>s.length>22?s.slice(0,19)+"…":s;
+const nameFor=a=>a?nameCache.get(a.toLowerCase()):null;
+const fmtAddr=a=>{
+  const name=nameFor(a);
+  const pfx=name?trimLabel(name):a.slice(0,6);
+  const rest=name?shortAddr(a):`${a.slice(6,14)}…${a.slice(-6)}`;
+  return `<a class="addr bslink" href="${BASESCAN}/address/${a}" target="_blank" rel="noopener noreferrer" title="${esc(name?name+' · '+a:'open on BaseScan')}" data-a="${a}" data-address="${a.toLowerCase()}"><span class="pfx">${esc(pfx)}</span><span class="rest">${esc(rest)}</span></a>`;
+};
+const addrLink=a=>a?`<a class="bslink" href="${BASESCAN}/address/${a}" target="_blank" rel="noopener noreferrer" title="${esc(a)}" data-address="${a.toLowerCase()}">${esc(nameFor(a)||shortAddr(a))}</a>`:"—";
 const txLink=tx=>tx?`<a class="bslink" href="${BASESCAN}/tx/${tx}" target="_blank" rel="noopener noreferrer">${tx.slice(0,10)}…${tx.slice(-6)}</a>`:"—";
 const blockLink=b=>b?`<a class="bslink" href="${BASESCAN}/block/${b}" target="_blank" rel="noopener noreferrer">${fmtN(b)}</a>`:"—";
 const fmtAge=ts=>{const s=Math.max(1,(Date.now()/1e3|0)-ts);if(s<60)return s+"s";if(s<3600)return (s/60|0)+"m";if(s<86400)return (s/3600|0)+"h";return (s/86400|0)+"d"};
@@ -262,13 +287,23 @@ async function loadDeploys(){
 
 async function loadTokens(){
   const p=new URLSearchParams();if(variant)p.set("variant",variant);if(search)p.set("q",search);
-  const list=await (await fetch("/api/tokens?"+p)).json();
+  const pageParams=new URLSearchParams(p);
+  pageParams.set("limit",tokenPageSize);
+  pageParams.set("offset",(tokenPage-1)*tokenPageSize);
+  const [list,count]=await Promise.all([
+    (await fetch("/api/tokens?"+pageParams)).json(),
+    (await fetch("/api/tokens/count?"+p)).json(),
+  ]);
+  tokenTotal=Number(count.total||0);
+  const maxPage=Math.max(1,Math.ceil(tokenTotal/tokenPageSize));
+  if(tokenPage>maxPage){tokenPage=maxPage;return loadTokens()}
   const detailTop=detailViewportTop();
   list.forEach(t=>tokenCache.set(t.address.toLowerCase(),{...(tokenCache.get(t.address.toLowerCase())||{}),...t}));
   currentRows=pinActiveRow(list);
-  if(!variant&&!search){allTokens=list;renderTicker(list)}
+  if(!variant&&!search&&tokenPage===1){allTokens=list;renderTicker(list)}
   $("#empty").hidden=list.length>0;
   renderRows();
+  renderPager();
   restoreDetailViewportTop(detailTop);
   list.forEach(t=>known.add(t.address));firstLoad=false;
 }
@@ -312,19 +347,76 @@ function renderRows(){
     const detail=tokenCache.get(activeDetailAddr)||t;
     return row+`<tr class="detail-row"><td colspan="6">${detailHtml(detail, !detail.events)}</td></tr>`;
   }).join("");
+  loadVisibleNames();
+}
+
+function renderPager(){
+  const pages=Math.max(1,Math.ceil(tokenTotal/tokenPageSize));
+  const from=tokenTotal?((tokenPage-1)*tokenPageSize+1):0;
+  const to=Math.min(tokenTotal,tokenPage*tokenPageSize);
+  $("#pager").innerHTML=compactPager({page:tokenPage,pages,from,to,total:tokenTotal,handler:"setTokenPage",label:"tokens"});
+}
+
+function compactPager({page,pages,from,to,total,handler,label}){
+  const items=[];
+  let last=0;
+  for(let i=1;i<=pages;i++){
+    if(i===1||i===pages||Math.abs(i-page)<=2){
+      if(last&&i-last>1)items.push(`<span class="dots">…</span>`);
+      items.push(`<button type="button" class="${i===page?"on":""}" onclick="${handler}(${i})">${i}</button>`);
+      last=i;
+    }
+  }
+  return `
+    <span class="info">${fmtN(from)}-${fmtN(to)} of ${fmtN(total)} ${label}</span>
+    <button type="button" ${page<=1?"disabled":""} onclick="${handler}(${page-1})">prev</button>
+    ${items.join("")}
+    <button type="button" ${page>=pages?"disabled":""} onclick="${handler}(${page+1})">next</button>`;
+}
+
+function setTokenPage(page){
+  const pages=Math.max(1,Math.ceil(tokenTotal/tokenPageSize));
+  tokenPage=Math.max(1,Math.min(page,pages));
+  activeDetailAddr="";activeDetailIndex=-1;activeEventPage=0;
+  loadTokens();
+}
+
+async function loadVisibleNames(){
+  if(namesLoading)return;
+  const addresses=[...new Set([...document.querySelectorAll("[data-address]")]
+    .map(el=>el.dataset.address)
+    .filter(a=>a&&!nameChecked.has(a))
+  )].slice(0,50);
+  if(!addresses.length)return;
+  addresses.forEach(a=>nameChecked.add(a));
+  namesLoading=true;
+  try{
+    const names=await (await fetch("/api/names?addresses="+encodeURIComponent(addresses.join(",")))).json();
+    let changed=false;
+    Object.entries(names).forEach(([addr,name])=>{
+      if(name&&!nameCache.has(addr)){nameCache.set(addr,name);changed=true}
+    });
+    if(changed)renderRows();
+  }catch{
+    addresses.forEach(a=>nameChecked.delete(a));
+  }finally{
+    namesLoading=false;
+  }
 }
 
 /* live activity rail */
 async function loadFeed(){
   const feed=await (await fetch("/api/feed")).json();
-  $("#feed").innerHTML=feed.map(e=>{
+  latestFeed=feed;
+  $("#feed").innerHTML=feed.map((e,i)=>{
     const id=e.tx+":"+e.block+":"+e.kind;
     const isNew=!firstLoad&&!seenEv.has(id);seenEv.add(id);
-    return `<div class="fi ${isNew?"slide":""}" onclick='openFromFeed(${JSON.stringify(e).replace(/'/g,"&#39;")})'>
+    return `<div class="fi ${isNew?"slide":""}" data-feed-index="${i}">
       <span class="fk ${e.kind==="Memo"?"memo":""}">${e.kind}</span>
       <span class="ft">$${esc(e.symbol)} · ${fmtAge(e.ts)}</span>
       <span class="fd">${esc(feedLine(e))}</span>
     </div>`}).join("");
+  loadVisibleNames();
 }
 function feedLine(e){
   const a=e.args;
@@ -472,7 +564,7 @@ function detailHtml(t,loading){
         </div>
       </div>`)}
     ${pane("activity",`
-      <div class="dcol">
+      <div class="activity-card">
         <h3>activity</h3>
         ${activityPageHtml(t,loading)}
       </div>`)}
@@ -488,19 +580,38 @@ function activityPageHtml(t,loading){
   activeEventPage=Math.max(0,Math.min(activeEventPage,pages-1));
   const start=activeEventPage*size;
   const rows=events.slice(start,start+size).map(e=>eventHtml(e,t)).join("");
-  const nav=pages>1?`<div class="dnav">${Array.from({length:pages},(_,i)=>`<button type="button" class="${i===activeEventPage?"on":""}" onclick="setEventPage(event,${i})">${i+1}</button>`).join("")}</div>`:"";
-  return rows+nav;
+  const from=events.length?start+1:0,to=Math.min(events.length,start+size);
+  const nav=pages>1?`<div class="pager compact">${compactPager({page:activeEventPage+1,pages,from,to,total:events.length,handler:"setEventPageNumber",label:"events"})}</div>`:"";
+  return `<div class="atable">
+    <div class="arow head"><span>event</span><span>from</span><span>to</span><span class="amount">amount</span><span>memo</span><span class="age">age</span></div>
+    ${rows}
+  </div>${nav}`;
 }
 function eventHtml(e,t){
-  return `<div class="ev"><span class="k">${e.kind}</span><span class="d">${evSummary(e,t)}</span><span class="age">${txLink(e.tx)} · ${fmtAge(e.ts)}</span></div>`;
+  const p=eventParts(e,t);
+  return `<div class="arow ${e.kind==="Memo"?"memo-row":""}">
+    <span class="kind">${esc(e.kind)}</span>
+    <span>${addressCell(p.from)}</span>
+    <span>${addressCell(p.to)}</span>
+    <span class="amount">${esc(p.amount)}</span>
+    <span class="memo" title="${esc(p.memo)}">${esc(p.memo)}</span>
+    <span class="age">${txLink(e.tx)} · ${fmtAge(e.ts)}</span>
+  </div>`;
 }
-function evSummary(e,t){
+function setEventPageNumber(page){setEventPage(null,page-1)}
+function addressCell(a){return a&&/^0x[0-9a-fA-F]{40}$/.test(a)?addrLink(a):esc(a||"—")}
+function amountFor(raw,decimals){
+  if(raw===undefined||raw===null||raw==="")return "—";
+  try{return (BigInt(raw)/(BigInt(10)**BigInt(decimals))).toLocaleString("en-US")}catch{return String(raw)}
+}
+function eventParts(e,t){
   const a=e.args,d=BigInt(10)**BigInt(t.live?.decimals??t.decimals??0);
-  if(e.kind==="Transfer")return `${addrLink(a.from)} → ${addrLink(a.to)} · ${(BigInt(a.amount)/d).toLocaleString("en-US")}`;
-  if(e.kind==="Memo")return esc(a.memo);
-  if(e.kind==="SupplyCapUpdated")return `cap → ${(BigInt(a.newSupplyCap)/d).toLocaleString("en-US")}`;
-  if(e.kind==="RoleGranted")return `${esc(a.role.slice(0,10))} → ${addrLink(a.account)}`;
-  return esc(JSON.stringify(a).slice(0,80));
+  if(e.kind==="Transfer")return {from:a.from,to:a.to,amount:amountFor(a.amount,t.live?.decimals??t.decimals??0),memo:"—"};
+  if(e.kind==="Memo")return {from:a.from||a.account||a.sender,to:a.to,amount:amountFor(a.amount,t.live?.decimals??t.decimals??0),memo:a.memo||"—"};
+  if(e.kind==="SupplyCapUpdated")return {from:"—",to:"—",amount:amountFor(a.newSupplyCap,t.live?.decimals??t.decimals??0),memo:"supply cap updated"};
+  if(e.kind==="RoleGranted"||e.kind==="RoleRevoked")return {from:a.role?.slice(0,10),to:a.account,amount:"—",memo:e.kind==="RoleGranted"?"role granted":"role revoked"};
+  if(e.kind==="Paused"||e.kind==="Unpaused")return {from:"—",to:"—",amount:"—",memo:JSON.stringify(a).slice(0,80)};
+  return {from:a.from||"—",to:a.to||"—",amount:amountFor(a.amount,t.live?.decimals??t.decimals??0),memo:JSON.stringify(a).slice(0,80)};
 }
 
 /* copy address on click (event delegation, stops row navigation) */
@@ -517,11 +628,18 @@ document.addEventListener("click",e=>{
   setTimeout(()=>{r.textContent=orig;el.classList.remove("copied")},900);
 },true);
 
+$("#feed").addEventListener("click",e=>{
+  const item=e.target.closest(".fi");
+  if(!item)return;
+  const ev=latestFeed[Number(item.dataset.feedIndex)];
+  if(ev)openFromFeed(ev);
+});
+
 document.querySelectorAll(".tab").forEach(b=>b.onclick=()=>{
   document.querySelectorAll(".tab").forEach(x=>x.classList.remove("on"));
-  b.classList.add("on");variant=b.dataset.v;loadTokens();
+  b.classList.add("on");variant=b.dataset.v;tokenPage=1;activeDetailAddr="";loadTokens();
 });
-let deb;$("#search").oninput=e=>{clearTimeout(deb);deb=setTimeout(()=>{search=e.target.value.trim();loadTokens()},250)};
+let deb;$("#search").oninput=e=>{clearTimeout(deb);deb=setTimeout(()=>{search=e.target.value.trim();tokenPage=1;activeDetailAddr="";loadTokens()},250)};
 
 loadStats();loadDeploys();loadTokens().then(loadFeed);
 setInterval(()=>{loadStats();loadDeploys();loadTokens();loadFeed()},10000);

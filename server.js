@@ -36,6 +36,20 @@ const token = new ethers.Interface([
 const liveCache = new Map();
 const LIVE_CACHE_MS = 15_000;
 const LIVE_READ_TIMEOUT_MS = 2_500;
+const nameCache = new Map();
+const NAME_CACHE_MS = 3_600_000;
+const NAME_READ_TIMEOUT_MS = 1_500;
+const NAME_API_TIMEOUT_MS = 1_200;
+const ENS_REGISTRY_ADDRESS = "0x00000000000C2E074eC69A0dFb2997BA6C7d2e1e";
+const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
+const ensRegistry = new ethers.Contract(
+  ENS_REGISTRY_ADDRESS,
+  ["function resolver(bytes32 node) view returns (address)"],
+  provider
+);
+const ensResolverAbi = [
+  "function name(bytes32 node) view returns (string)",
+];
 const seriesCache = { at: 0, value: null };
 const DEPLOY_SERIES_CACHE_MS = 30_000;
 const ZERO_ROLE = "0x0000000000000000000000000000000000000000000000000000000000000000";
@@ -95,6 +109,61 @@ async function liveToken(address) {
   return value;
 }
 
+async function basenameFor(address) {
+  const key = address.toLowerCase();
+  const cached = nameCache.get(key);
+  if (cached && Date.now() - cached.at < NAME_CACHE_MS) return cached.value;
+  let value = null;
+  const reverseNode = ethers.namehash(`${key.slice(2)}.addr.reverse`);
+  try {
+    const resolverAddress = await withTimeout(ensRegistry.resolver(reverseNode), NAME_READ_TIMEOUT_MS);
+    if (resolverAddress && resolverAddress !== ZERO_ADDRESS) {
+      const resolver = new ethers.Contract(resolverAddress, ensResolverAbi, provider);
+      const name = await withTimeout(resolver.name(reverseNode), NAME_READ_TIMEOUT_MS);
+      if (name && /\.base\.eth$/i.test(name)) value = name;
+    }
+  } catch {
+    value = null;
+  }
+  if (!value) {
+    try {
+      value = await withTimeout(provider.lookupAddress(address), NAME_READ_TIMEOUT_MS);
+    } catch {
+      value = null;
+    }
+    if (value && !/\.base\.eth$/i.test(value)) value = null;
+  }
+  if (!value) value = await basenameFromProfile(address);
+  nameCache.set(key, { at: Date.now(), value });
+  if (nameCache.size > 4096) nameCache.delete(nameCache.keys().next().value);
+  return value;
+}
+
+async function basenameFromProfile(address) {
+  try {
+    const res = await withTimeout(fetch(`https://api.web3.bio/profile/${address}`), NAME_API_TIMEOUT_MS);
+    if (!res.ok) return null;
+    const profiles = await withTimeout(res.json(), NAME_API_TIMEOUT_MS);
+    if (!Array.isArray(profiles)) return null;
+    const lower = address.toLowerCase();
+    const exact = profiles.find((p) =>
+      String(p.address || "").toLowerCase() === lower &&
+      String(p.platform || "").toLowerCase() === "basenames" &&
+      /\.base\.eth$/i.test(String(p.identity || p.displayName || ""))
+    );
+    return exact ? String(exact.identity || exact.displayName) : null;
+  } catch {
+    return null;
+  }
+}
+
+function tokenFilter(variant, search) {
+  const cond = [], params = [];
+  if (variant !== null) { cond.push("variant=?"); params.push(variant); }
+  if (search) { cond.push("(symbol LIKE ? OR name LIKE ? OR address LIKE ?)"); params.push(`%${search}%`, `%${search}%`, `%${search}%`); }
+  return { where: cond.length ? " WHERE " + cond.join(" AND ") : "", params };
+}
+
 const q = {
   stats: db.prepare(`SELECT
     (SELECT COUNT(*) FROM tokens) tokens,
@@ -105,13 +174,14 @@ const q = {
     (SELECT value FROM meta WHERE key='cursor') cursor,
     (SELECT value FROM meta WHERE key='token_cursor') event_cursor`),
   tokens: (variant, search) => {
-    let sql = "SELECT * FROM tokens";
-    const cond = [], params = [];
-    if (variant !== null) { cond.push("variant=?"); params.push(variant); }
-    if (search) { cond.push("(symbol LIKE ? OR name LIKE ? OR address LIKE ?)"); params.push(`%${search}%`, `%${search}%`, `%${search}%`); }
-    if (cond.length) sql += " WHERE " + cond.join(" AND ");
+    const { where, params } = tokenFilter(variant, search);
+    let sql = "SELECT * FROM tokens" + where;
     sql += " ORDER BY block DESC LIMIT ? OFFSET ?";
     return { sql, params };
+  },
+  tokenCount: (variant, search) => {
+    const { where, params } = tokenFilter(variant, search);
+    return { sql: "SELECT COUNT(*) total FROM tokens" + where, params };
   },
   token: db.prepare("SELECT * FROM tokens WHERE address=? COLLATE NOCASE"),
   tokenEvents: db.prepare("SELECT kind,block,tx,ts,args FROM events WHERE token=? COLLATE NOCASE ORDER BY block DESC, log_index DESC LIMIT 200"),
@@ -203,6 +273,27 @@ app.get("/api/tokens", (req, res) => {
   const offset = Number(req.query.offset || 0);
   const { sql, params } = q.tokens(variant, search);
   res.json(db.prepare(sql).all(...params, limit, offset));
+});
+
+app.get("/api/tokens/count", (req, res) => {
+  const variant = req.query.variant === "asset" ? 0 : req.query.variant === "stablecoin" ? 1 : null;
+  const search = (req.query.q || "").slice(0, 64) || null;
+  const { sql, params } = q.tokenCount(variant, search);
+  res.json(db.prepare(sql).get(...params));
+});
+
+app.get("/api/names", async (req, res) => {
+  const raw = String(req.query.addresses || "");
+  const addresses = [...new Set(raw.split(",").map((a) => a.trim()).filter(Boolean))].slice(0, 50);
+  const out = {};
+  await Promise.all(addresses.map(async (addr) => {
+    try {
+      const checked = ethers.getAddress(addr);
+      const name = await basenameFor(checked);
+      if (name) out[checked.toLowerCase()] = name;
+    } catch { /* skip invalid address */ }
+  }));
+  res.json(out);
 });
 
 app.get("/api/tokens/:address/live", async (req, res) => {
