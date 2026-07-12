@@ -129,6 +129,10 @@ tr.row:hover td{background:var(--panel)}
 @keyframes slidein{from{transform:translateY(-8px);opacity:0}to{transform:none;opacity:1}}
 
 /* --- inline token detail --- */
+.spotlight{margin:0 0 18px;border:1px solid var(--ink);border-left:6px solid var(--blue);background:var(--paper)}
+.spotlight[hidden]{display:none}
+.spot-k{padding:8px 14px;border-bottom:1px solid var(--line);font-size:10px;font-weight:600;letter-spacing:.12em;color:var(--blue);background:var(--blue-wash)}
+.spotlight .detail{border:0}
 .detail-row td{padding:0;border-bottom:1px solid var(--ink);overflow:visible}
 .detail{border:1px solid var(--ink);border-top:0;background:var(--paper)}
 .dh{display:flex;align-items:baseline;gap:14px;padding:16px 18px;border-bottom:1px solid var(--line);flex-wrap:wrap}
@@ -193,6 +197,7 @@ footer a:hover{text-decoration:underline}
       <button class="tab" data-v="stablecoin">stablecoin</button>
       <input id="search" placeholder="search symbol, name, or 0xB200 address" autocomplete="off">
     </div>
+    <div class="spotlight" id="spotlight" hidden></div>
     <table>
       <thead><tr>
         <th>token</th><th>address</th><th>variant</th>
@@ -219,7 +224,7 @@ footer a:hover{text-decoration:underline}
 
 <script>
 const $=s=>document.querySelector(s);
-let variant="", search="", known=new Set(), seenEv=new Set(), firstLoad=true, allTokens=[], currentRows=[], activeDetailAddr="", activeDetailIndex=-1, activeDetailPane="overview", activeEventPage=0;
+let variant="", search="", known=new Set(), seenEv=new Set(), firstLoad=true, allTokens=[], currentRows=[], activeDetailAddr="", activeDetailIndex=-1, activeDetailPane="overview", activeEventPage=0, activeDetailMode="inline";
 const tokenCache=new Map();
 const nameCache=new Map(), nameChecked=new Set();
 let namesLoading=false, tokenPage=1, tokenPageSize=50, tokenTotal=0, latestFeed=[];
@@ -310,7 +315,7 @@ async function loadTokens(){
 }
 
 function pinActiveRow(list){
-  if(!activeDetailAddr)return list;
+  if(!activeDetailAddr||activeDetailMode==="spotlight")return list;
   const idx=list.findIndex(t=>t.address.toLowerCase()===activeDetailAddr);
   if(idx>=0){activeDetailIndex=idx;return list}
   const active=tokenCache.get(activeDetailAddr);
@@ -322,18 +327,22 @@ function pinActiveRow(list){
 }
 
 function detailViewportTop(){
-  return activeDetailAddr?document.querySelector("tr.detail-row")?.getBoundingClientRect().top:null;
+  if(!activeDetailAddr)return null;
+  const el=activeDetailMode==="spotlight"?$("#spotlight"):document.querySelector("tr.detail-row");
+  return el?.getBoundingClientRect().top ?? null;
 }
 
 function restoreDetailViewportTop(prevTop){
   if(prevTop==null)return;
-  const nextTop=document.querySelector("tr.detail-row")?.getBoundingClientRect().top;
+  const el=activeDetailMode==="spotlight"?$("#spotlight"):document.querySelector("tr.detail-row");
+  const nextTop=el?.getBoundingClientRect().top;
   if(nextTop==null)return;
   const delta=nextTop-prevTop;
   if(Math.abs(delta)>1)window.scrollBy(0,delta);
 }
 
 function renderRows(){
+  renderSpotlight();
   $("#rows").innerHTML=currentRows.map(t=>{
     const row=`
     <tr class="row ${!firstLoad&&!known.has(t.address)?"fresh":""}" onclick="openToken('${t.address}')">
@@ -344,11 +353,20 @@ function renderRows(){
       <td class="num">${fmtN(t.transfer_count)}</td>
       <td class="num" title="${esc(fmtDate(t.ts))}">${fmtAge(t.ts)} ago</td>
     </tr>`;
-    if(activeDetailAddr!==t.address.toLowerCase())return row;
+    if(activeDetailMode==="spotlight"||activeDetailAddr!==t.address.toLowerCase())return row;
     const detail=tokenCache.get(activeDetailAddr)||t;
     return row+`<tr class="detail-row"><td colspan="6">${detailHtml(detail, !detail.events)}</td></tr>`;
   }).join("");
   loadVisibleNames();
+}
+
+function renderSpotlight(){
+  const box=$("#spotlight");
+  if(activeDetailMode!=="spotlight"||!activeDetailAddr){box.hidden=true;box.innerHTML="";return}
+  const detail=tokenCache.get(activeDetailAddr);
+  if(!detail){box.hidden=true;box.innerHTML="";return}
+  box.hidden=false;
+  box.innerHTML=`<div class="spot-k">LIVE ACTIVITY SELECTION</div>${detailHtml(detail,!detail.events)}`;
 }
 
 function renderPager(){
@@ -378,7 +396,7 @@ function compactPager({page,pages,from,to,total,handler,label}){
 function setTokenPage(page){
   const pages=Math.max(1,Math.ceil(tokenTotal/tokenPageSize));
   tokenPage=Math.max(1,Math.min(page,pages));
-  activeDetailAddr="";activeDetailIndex=-1;activeEventPage=0;
+  activeDetailAddr="";activeDetailIndex=-1;activeEventPage=0;activeDetailMode="inline";
   loadTokens();
 }
 
@@ -445,16 +463,17 @@ function seedFromFeed(e){
 }
 
 function openFromFeed(e){
-  openToken(e.token,paneForEvent(e.kind),seedFromFeed(e));
+  openToken(e.token,paneForEvent(e.kind),seedFromFeed(e),"spotlight");
 }
 
-async function openToken(addr,pane=null,seed=null){
+async function openToken(addr,pane=null,seed=null,mode="inline"){
   const nextAddr=addr.toLowerCase();
-  if(activeDetailAddr===nextAddr && tokenCache.get(nextAddr)?.events && pane===null){closeDetail();return}
+  if(activeDetailAddr===nextAddr && activeDetailMode===mode && tokenCache.get(nextAddr)?.events && pane===null){closeDetail();return}
   if(activeDetailAddr!==nextAddr){activeDetailPane=pane||"overview";activeEventPage=0}
   else if(pane){activeDetailPane=pane;activeEventPage=0}
+  activeDetailMode=mode;
   activeDetailAddr=nextAddr;
-  activeDetailIndex=currentRows.findIndex(t=>t.address.toLowerCase()===activeDetailAddr);
+  activeDetailIndex=activeDetailMode==="spotlight"?0:currentRows.findIndex(t=>t.address.toLowerCase()===activeDetailAddr);
   if(activeDetailIndex<0)activeDetailIndex=0;
   if(seed)tokenCache.set(activeDetailAddr,{...(tokenCache.get(activeDetailAddr)||{}),...seed});
   const cached=tokenCache.get(activeDetailAddr);
@@ -462,6 +481,7 @@ async function openToken(addr,pane=null,seed=null){
     tokenCache.set(activeDetailAddr,{...cached,events:cached.events||null,holders:cached.holders||null});
     currentRows=pinActiveRow(currentRows);
     renderRows();
+    if(activeDetailMode==="spotlight")scrollSpotlightIntoView();
   }
   try{
     const t=await (await fetch("/api/tokens/"+addr)).json();
@@ -469,10 +489,14 @@ async function openToken(addr,pane=null,seed=null){
     if(activeDetailAddr!==t.address.toLowerCase())return;
     currentRows=pinActiveRow(currentRows);
     renderRows();
+    if(activeDetailMode==="spotlight")scrollSpotlightIntoView();
     fetchLive(t.address,t);
   }catch{
     if(cached){tokenCache.set(activeDetailAddr,{...cached,error:"detail unavailable"});renderRows()}
   }
+}
+function scrollSpotlightIntoView(){
+  requestAnimationFrame(()=>$("#spotlight")?.scrollIntoView({block:"start",behavior:"smooth"}));
 }
 async function fetchLive(addr,base){
   try{
@@ -573,7 +597,7 @@ function detailHtml(t,loading){
       </div>`)}
   </div>`;
 }
-function closeDetail(e){e?.stopPropagation();activeDetailAddr="";activeDetailIndex=-1;renderRows()}
+function closeDetail(e){e?.stopPropagation();activeDetailAddr="";activeDetailIndex=-1;activeDetailMode="inline";renderRows()}
 function setDetailPane(e,pane){e?.stopPropagation();activeDetailPane=pane;renderRows()}
 function setEventPage(e,page){e?.stopPropagation();activeEventPage=page;renderRows()}
 function activityPageHtml(t,loading){
@@ -641,9 +665,9 @@ $("#feed").addEventListener("click",e=>{
 
 document.querySelectorAll(".tab").forEach(b=>b.onclick=()=>{
   document.querySelectorAll(".tab").forEach(x=>x.classList.remove("on"));
-  b.classList.add("on");variant=b.dataset.v;tokenPage=1;activeDetailAddr="";loadTokens();
+  b.classList.add("on");variant=b.dataset.v;tokenPage=1;activeDetailAddr="";activeDetailMode="inline";loadTokens();
 });
-let deb;$("#search").oninput=e=>{clearTimeout(deb);deb=setTimeout(()=>{search=e.target.value.trim();tokenPage=1;activeDetailAddr="";loadTokens()},250)};
+let deb;$("#search").oninput=e=>{clearTimeout(deb);deb=setTimeout(()=>{search=e.target.value.trim();tokenPage=1;activeDetailAddr="";activeDetailMode="inline";loadTokens()},250)};
 
 loadStats();loadDeploys();loadTokens().then(loadFeed);
 setInterval(()=>{loadStats();loadDeploys();loadTokens();loadFeed()},10000);
