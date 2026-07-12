@@ -1,0 +1,32 @@
+[Unit]
+Description=B20SCAN API and web UI
+After=network-online.target b20scan-indexer.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/b20scan
+EnvironmentFile=/etc/b20scan.env
+Environment=PORT=3020
+ExecStart=/usr/bin/node /opt/b20scan/server.js
+Restart=always
+RestartSec=5
+User=b20scan
+Group=b20scan
+StateDirectory=b20scan
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/b20scan
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target

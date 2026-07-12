@@ -1,0 +1,21 @@
+{
+  "name": "b20scan",
+  "version": "1.0.0",
+  "description": "",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "index": "node indexer.js",
+    "backfill": "node indexer.js --once",
+    "test": "node --check chain.js && node --check db.js && node --check indexer.js && node --check server.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "better-sqlite3": "^11.10.0",
+    "dotenv": "^16.6.1",
+    "ethers": "^6.17.0",
+    "express": "^4.22.2"
+  }
+}

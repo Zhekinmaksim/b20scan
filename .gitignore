@@ -1,0 +1,4 @@
+node_modules/
+b20scan.db*
+.env
+b20scan-prod-patch.zip
