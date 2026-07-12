@@ -85,7 +85,7 @@ header{border-bottom:1px solid var(--ink)}
 .bar input{margin-left:auto;border:1px solid var(--line);padding:8px 12px;font:inherit;font-size:12px;width:250px;outline-color:var(--blue)}
 
 table{width:100%;border-collapse:collapse;table-layout:fixed}
-th:nth-child(1){width:25%}th:nth-child(2){width:28%}th:nth-child(3){width:13%}th:nth-child(4){width:12%}th:nth-child(5){width:13%}th:nth-child(6){width:9%}
+th:nth-child(1){width:24%}th:nth-child(2){width:27%}th:nth-child(3){width:12%}th:nth-child(4){width:10%}th:nth-child(5){width:12%}th:nth-child(6){width:15%}
 th{font-size:11px;color:var(--slate);text-align:left;font-weight:500;padding:8px 10px;border-bottom:1px solid var(--line)}
 td{padding:12px 10px;border-bottom:1px solid var(--line);vertical-align:middle;overflow:hidden}
 tr.row{cursor:pointer}
@@ -152,13 +152,13 @@ tr.row:hover td{background:var(--panel)}
 .activity-card{padding:14px 18px}
 .activity-card h3{font-size:11px;color:var(--slate);font-weight:500;margin-bottom:8px}
 .atable{border-top:1px solid var(--line)}
-.arow{display:grid;grid-template-columns:110px minmax(110px,1fr) minmax(110px,1fr) minmax(90px,.7fr) minmax(140px,1.25fr) minmax(130px,.9fr);gap:12px;align-items:center;border-bottom:1px solid var(--line);font-size:12px;min-height:42px}
+.arow{display:grid;grid-template-columns:96px minmax(112px,1fr) minmax(112px,1fr) 76px minmax(92px,.85fr) minmax(120px,1fr) 58px;gap:12px;align-items:center;border-bottom:1px solid var(--line);font-size:12px;min-height:42px}
 .arow.head{min-height:34px;color:var(--slate);font-size:11px}
 .arow:not(.head):hover{background:var(--panel)}
 .arow.memo-row{background:var(--blue-wash)}
 .arow span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .arow .kind{font-weight:600;color:var(--blue)}
-.arow .amount,.arow .age{text-align:right}
+.arow .amount,.arow .hash,.arow .age{text-align:right}
 .arow .memo{color:var(--blue-dark)}
 .empty{padding:40px 10px;text-align:center;color:var(--slate);font-size:13px}
 footer{padding:26px 0 40px;color:var(--slate);font-size:11px;display:flex;gap:16px;flex-wrap:wrap}
@@ -238,6 +238,7 @@ const addrLink=a=>a?`<a class="bslink" href="${BASESCAN}/address/${a}" target="_
 const txLink=tx=>tx?`<a class="bslink" href="${BASESCAN}/tx/${tx}" target="_blank" rel="noopener noreferrer">${tx.slice(0,10)}…${tx.slice(-6)}</a>`:"—";
 const blockLink=b=>b?`<a class="bslink" href="${BASESCAN}/block/${b}" target="_blank" rel="noopener noreferrer">${fmtN(b)}</a>`:"—";
 const fmtAge=ts=>{const s=Math.max(1,(Date.now()/1e3|0)-ts);if(s<60)return s+"s";if(s<3600)return (s/60|0)+"m";if(s<86400)return (s/3600|0)+"h";return (s/86400|0)+"d"};
+const fmtDate=ts=>ts?new Date(ts*1000).toLocaleString("en-US",{month:"short",day:"numeric",year:"numeric",hour:"2-digit",minute:"2-digit"}):"—";
 const fmtN=n=>Number(n).toLocaleString("en-US");
 const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 
@@ -341,7 +342,7 @@ function renderRows(){
       <td>${t.variant===0?'<span class="chip a">ASSET</span>':'<span class="chip s">STABLE'+(t.currency?" · "+esc(t.currency):"")+'</span>'}</td>
       <td class="num">${fmtN(t.holder_count)}</td>
       <td class="num">${fmtN(t.transfer_count)}</td>
-      <td class="num">${fmtAge(t.ts)} ago</td>
+      <td class="num" title="${esc(fmtDate(t.ts))}">${fmtAge(t.ts)} ago</td>
     </tr>`;
     if(activeDetailAddr!==t.address.toLowerCase())return row;
     const detail=tokenCache.get(activeDetailAddr)||t;
@@ -527,7 +528,9 @@ function detailHtml(t,loading){
         </div>
         <div class="dcol">
           <h3>token</h3>
-          <div class="kv"><b>created</b><span>block ${blockLink(t.block)} · ${fmtAge(t.ts)} ago</span></div>
+          <div class="kv"><b>created</b><span title="${esc(fmtDate(t.ts))}">${esc(fmtDate(t.ts))}</span></div>
+          <div class="kv"><b>age</b><span>${fmtAge(t.ts)} ago</span></div>
+          <div class="kv"><b>block</b><span>${blockLink(t.block)}</span></div>
           <div class="kv"><b>deploy tx</b><span>${txLink(t.tx)}</span></div>
           <div class="kv"><b>decimals</b><span>${decimals}</span></div>
           <div class="kv"><b>supply</b><span>${supplyH}</span></div>
@@ -583,7 +586,7 @@ function activityPageHtml(t,loading){
   const from=events.length?start+1:0,to=Math.min(events.length,start+size);
   const nav=pages>1?`<div class="pager compact">${compactPager({page:activeEventPage+1,pages,from,to,total:events.length,handler:"setEventPageNumber",label:"events"})}</div>`:"";
   return `<div class="atable">
-    <div class="arow head"><span>event</span><span>from</span><span>to</span><span class="amount">amount</span><span>memo</span><span class="age">age</span></div>
+    <div class="arow head"><span>event</span><span>from</span><span>to</span><span class="amount">amount</span><span>memo</span><span class="hash">hash</span><span class="age">age</span></div>
     ${rows}
   </div>${nav}`;
 }
@@ -595,7 +598,8 @@ function eventHtml(e,t){
     <span>${addressCell(p.to)}</span>
     <span class="amount">${esc(p.amount)}</span>
     <span class="memo" title="${esc(p.memo)}">${esc(p.memo)}</span>
-    <span class="age">${txLink(e.tx)} · ${fmtAge(e.ts)}</span>
+    <span class="hash">${txLink(e.tx)}</span>
+    <span class="age" title="${esc(fmtDate(e.ts))}">${fmtAge(e.ts)}</span>
   </div>`;
 }
 function setEventPageNumber(page){setEventPage(null,page-1)}
