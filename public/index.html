@@ -117,28 +117,32 @@ tr.row:hover td{background:var(--panel)}
 .fi.slide{animation:slidein .5s ease}
 @keyframes slidein{from{transform:translateY(-8px);opacity:0}to{transform:none;opacity:1}}
 
-/* --- detail --- */
-.detail{display:none;border:1px solid var(--ink);margin:16px 0;background:var(--paper)}
-.detail.open{display:block}
+/* --- inline token detail --- */
+.detail-row td{padding:0;border-bottom:1px solid var(--ink);overflow:visible}
+.detail{border:1px solid var(--ink);border-top:0;background:var(--paper)}
 .dh{display:flex;align-items:baseline;gap:14px;padding:16px 18px;border-bottom:1px solid var(--line);flex-wrap:wrap}
 .dh .t{font-family:var(--disp);font-weight:700;font-size:22px}
-.dh .x{margin-left:auto;cursor:pointer;border:0;background:none;font-size:16px;color:var(--slate)}
-.dgrid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
+.dh .x{margin-left:auto;cursor:pointer;border:1px solid var(--line);background:#fff;padding:4px 9px;font-size:14px;color:var(--slate)}
+.dh .x:hover{border-color:var(--ink);color:var(--ink)}
+.dgrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}
 .dcol{padding:14px 18px}
-.dcol+.dcol{border-left:1px solid var(--line)}
+.dcol:nth-child(even){border-left:1px solid var(--line)}
+.dcol:nth-child(n+3){border-top:1px solid var(--line)}
 .dcol h3{font-size:11px;color:var(--slate);font-weight:500;margin-bottom:8px}
 .kv{display:flex;justify-content:space-between;gap:12px;font-size:12px;padding:4px 0}
 .kv b{font-weight:500;color:var(--slate)}
+.kv span{text-align:right;overflow:hidden;text-overflow:ellipsis}
 .kv .uri{max-width:70%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--blue)}
-.ev{font-size:12px;padding:5px 0;border-bottom:1px dashed var(--line);display:flex;gap:10px}
+.ev{font-size:12px;padding:5px 0;border-bottom:1px dashed var(--line);display:grid;grid-template-columns:110px 1fr auto;gap:10px}
 .ev:last-child{border-bottom:0}
-.ev .k{color:var(--blue);font-weight:600;min-width:110px}
+.ev .k{color:var(--blue);font-weight:600}
 .ev .d{color:var(--slate);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ev .age{color:var(--slate);text-align:right}
 .empty{padding:40px 10px;text-align:center;color:var(--slate);font-size:13px}
 footer{padding:26px 0 40px;color:var(--slate);font-size:11px;display:flex;gap:16px;flex-wrap:wrap}
 footer a{color:var(--blue);text-decoration:none}
 footer a:hover{text-decoration:underline}
-@media(max-width:900px){.wrap{padding:0 20px}.hd{padding:18px 20px}.main{grid-template-columns:1fr}.rail{position:static}.strip{grid-template-columns:repeat(3,1fr)}.pulse{grid-column:1/-1;border-left:0;padding-left:0}.stat{padding-left:12px}.bar input{width:100%;margin-left:0}.dgrid{grid-template-columns:1fr}.dcol+.dcol{border-left:0;border-top:1px solid var(--line)}}
+@media(max-width:900px){.wrap{padding:0 20px}.hd{padding:18px 20px}.main{grid-template-columns:1fr}.rail{position:static}.strip{grid-template-columns:repeat(3,1fr)}.pulse{grid-column:1/-1;border-left:0;padding-left:0}.stat{padding-left:12px}.bar input{width:100%;margin-left:0}.dgrid{grid-template-columns:1fr}.dcol:nth-child(even){border-left:0}.dcol:nth-child(n+2){border-top:1px solid var(--line)}}
 </style>
 </head>
 <body>
@@ -156,7 +160,7 @@ footer a:hover{text-decoration:underline}
   <div class="stat"><div class="n" id="s-stables">0</div><div class="l">stablecoin</div></div>
   <div class="stat"><div class="n" id="s-transfers">0</div><div class="l">transfers</div></div>
   <div class="stat"><div class="n" id="s-memos">0</div><div class="l">memos</div></div>
-  <div class="pulse"><div class="l">deploys · last 24h</div><div class="bars" id="bars"></div></div>
+  <div class="pulse"><div class="l">deploys · all time</div><div class="bars" id="bars"></div></div>
 </div>
 
 <div class="wrap main">
@@ -167,7 +171,6 @@ footer a:hover{text-decoration:underline}
       <button class="tab" data-v="stablecoin">stablecoin</button>
       <input id="search" placeholder="search symbol, name, or 0xB200 address" autocomplete="off">
     </div>
-    <div class="detail" id="detail"></div>
     <table>
       <thead><tr>
         <th>token</th><th>address</th><th>variant</th>
@@ -193,7 +196,7 @@ footer a:hover{text-decoration:underline}
 
 <script>
 const $=s=>document.querySelector(s);
-let variant="", search="", known=new Set(), seenEv=new Set(), firstLoad=true, allTokens=[], activeDetailAddr="";
+let variant="", search="", known=new Set(), seenEv=new Set(), firstLoad=true, allTokens=[], currentRows=[], activeDetailAddr="";
 const tokenCache=new Map();
 
 const fmtAddr=a=>`<span class="addr" data-a="${a}" title="click to copy"><span class="pfx">${a.slice(0,6)}</span><span class="rest">${a.slice(6,14)}…${a.slice(-6)}</span></span>`;
@@ -233,21 +236,31 @@ function renderTicker(list){
   $("#tk-track").innerHTML=items+items; /* x2 = seamless -50% loop */
 }
 
-/* hourly deploy pulse: 24 bars from token timestamps */
-function renderBars(list){
-  const now=Date.now()/1e3|0, buckets=new Array(24).fill(0);
-  list.forEach(t=>{const h=Math.floor((now-t.ts)/3600);if(h>=0&&h<24)buckets[23-h]++});
-  const max=Math.max(1,...buckets);
-  $("#bars").innerHTML=buckets.map((v,i)=>
-    `<i style="height:${Math.max(6,v/max*100)}%" class="${v>0?"hot":""}" title="${v} deploy${v===1?"":"s"} · ${23-i}h ago"></i>`).join("");
+function renderBars(series){
+  const buckets=series.buckets||[];
+  const max=Math.max(1,...buckets.map(b=>b.count));
+  $("#bars").innerHTML=buckets.map(b=>
+    `<i style="height:${Math.max(6,b.count/max*100)}%" class="${b.count>0?"hot":""}" title="${fmtN(b.count)} deploy${b.count===1?"":"s"} · ${new Date(b.from*1000).toLocaleDateString("en-US",{month:"short",day:"numeric"})}"></i>`).join("");
+}
+
+async function loadDeploys(){
+  const series=await (await fetch("/api/deploys")).json();
+  renderBars(series);
 }
 
 async function loadTokens(){
   const p=new URLSearchParams();if(variant)p.set("variant",variant);if(search)p.set("q",search);
   const list=await (await fetch("/api/tokens?"+p)).json();
-  if(!variant&&!search){allTokens=list;renderTicker(list);renderBars(list)}
+  currentRows=list;
+  if(!variant&&!search){allTokens=list;renderTicker(list)}
   $("#empty").hidden=list.length>0;
-  $("#rows").innerHTML=list.map(t=>`
+  renderRows();
+  list.forEach(t=>{known.add(t.address);tokenCache.set(t.address.toLowerCase(),{...(tokenCache.get(t.address.toLowerCase())||{}),...t})});firstLoad=false;
+}
+
+function renderRows(){
+  $("#rows").innerHTML=currentRows.map(t=>{
+    const row=`
     <tr class="row ${!firstLoad&&!known.has(t.address)?"fresh":""}" onclick="openToken('${t.address}')">
       <td><span class="sym">${esc(t.symbol)}</span><br><span class="name">${esc(t.name)}</span></td>
       <td>${fmtAddr(t.address)}</td>
@@ -255,8 +268,11 @@ async function loadTokens(){
       <td class="num">${fmtN(t.holder_count)}</td>
       <td class="num">${fmtN(t.transfer_count)}</td>
       <td class="num">${fmtAge(t.ts)} ago</td>
-    </tr>`).join("");
-  list.forEach(t=>{known.add(t.address);tokenCache.set(t.address.toLowerCase(),t)});firstLoad=false;
+    </tr>`;
+    if(activeDetailAddr!==t.address.toLowerCase())return row;
+    const detail=tokenCache.get(activeDetailAddr)||t;
+    return row+`<tr class="detail-row"><td colspan="6">${detailHtml(detail, !detail.events)}</td></tr>`;
+  }).join("");
 }
 
 /* live activity rail */
@@ -282,17 +298,19 @@ function feedLine(e){
 }
 
 async function openToken(addr){
-  activeDetailAddr=addr.toLowerCase();
+  const nextAddr=addr.toLowerCase();
+  if(activeDetailAddr===nextAddr && tokenCache.get(nextAddr)?.events){closeDetail();return}
+  activeDetailAddr=nextAddr;
   const cached=tokenCache.get(activeDetailAddr);
-  if(cached)renderDetail({...cached,events:[],holders:[],live:null},true,true);
+  if(cached){tokenCache.set(activeDetailAddr,{...cached,events:cached.events||null,holders:cached.holders||null});renderRows()}
   try{
     const t=await (await fetch("/api/tokens/"+addr)).json();
     tokenCache.set(t.address.toLowerCase(),t);
     if(activeDetailAddr!==t.address.toLowerCase())return;
-    renderDetail(t,!cached,false);
+    renderRows();
     fetchLive(t.address,t);
   }catch{
-    if(cached)renderDetail({...cached,events:[],holders:[],live:null,error:"detail unavailable"},false,false);
+    if(cached){tokenCache.set(activeDetailAddr,{...cached,error:"detail unavailable"});renderRows()}
   }
 }
 async function fetchLive(addr,base){
@@ -302,52 +320,74 @@ async function fetchLive(addr,base){
     const current=tokenCache.get(addr.toLowerCase())||base;
     const next={...current,live};
     tokenCache.set(addr.toLowerCase(),next);
-    renderDetail(next,false,false);
+    renderRows();
   }catch{}
 }
-function renderDetail(t,scroll,loading){
+function detailHtml(t,loading){
   const live=t.live||{};
+  const controls=t.controls||{};
+  const roles=controls.roles||{};
+  const roleLabels=Object.keys(roles);
+  const paused=controls.paused||[];
+  const policy=controls.policy||{};
+  const policyValues=Object.values(policy).filter(v=>v!==undefined&&v!==null);
   const decimals=live.decimals??t.decimals??0;
   const d=BigInt(10)**BigInt(decimals);
   const supply=live.total_supply??t.total_supply??"0";
-  const supplyCap=live.supply_cap;
+  const supplyCap=live.supply_cap??controls.supply_cap;
   const supplyH=(BigInt(supply)/d).toLocaleString("en-US");
   const capH=supplyCap===null||supplyCap===undefined?"—":(BigInt(supplyCap)/d).toLocaleString("en-US");
+  const headroom=supplyCap===null||supplyCap===undefined?"—":((BigInt(supplyCap)-BigInt(supply))/d).toLocaleString("en-US");
   const liveName=live.name||t.name, liveSymbol=live.symbol||t.symbol;
   const multiplier=live.multiplier?`${Number(live.multiplier)/1e18}×`:null;
   const uri=/^(https?:\/\/|ipfs:\/\/)/i.test(live.contract_uri||"")?live.contract_uri:null;
-  $("#detail").innerHTML=`
+  const memo=controls.memo||(t.events||[]).find(e=>e.kind==="Memo")?.args?.memo;
+  const currency=live.currency||t.currency;
+  return `<div class="detail">
     <div class="dh">
-      <span class="t">$${esc(liveSymbol)}</span><span class="name">${esc(liveName)}</span>
-      ${t.variant===0?'<span class="chip a">ASSET</span>':'<span class="chip s">STABLE'+((live.currency||t.currency)?" · "+esc(live.currency||t.currency):"")+'</span>'}
-      <button class="x" onclick="closeDetail()">×</button>
+      <span class="t">$${esc(liveSymbol)}</span><span class="name">${esc(liveName)} · issuer controls</span>
+      ${t.variant===0?'<span class="chip a">ASSET</span>':'<span class="chip s">STABLE'+(currency?" · "+esc(currency):"")+'</span>'}
+      <button class="x" type="button" onclick="closeDetail(event)">close</button>
     </div>
     <div class="dgrid">
       <div class="dcol">
-        <h3>token</h3>
+        <h3>B20SCAN state</h3>
         <div class="kv"><b>address</b>${fmtAddr(t.address)}</div>
-        <div class="kv"><b>creator</b><span>${t.creator?t.creator.slice(0,10)+"…"+t.creator.slice(-6):"—"}</span></div>
+        <div class="kv"><b>type</b><span>B20 · native precompile</span></div>
+        <div class="kv"><b>transfers</b><span>${fmtN(t.transfer_count)}</span></div>
+        <div class="kv"><b>memo</b><span>${memo?esc(memo):"—"}</span></div>
+        <div class="kv"><b>variant</b><span>${t.variant===0?"ASSET":"STABLECOIN"}${currency?" · "+esc(currency):""}</span></div>
+        <div class="kv"><b>issuer roles</b><span>${roleLabels.length?esc(roleLabels.join(" / ")):"—"}</span></div>
+        <div class="kv"><b>supply cap</b><span>${capH}</span></div>
+        <div class="kv"><b>policy state</b><span>${policyValues.length?policyValues.map(v=>"#"+esc(v)).join(" / "):"none"}</span></div>
+      </div>
+      <div class="dcol">
+        <h3>token</h3>
         <div class="kv"><b>created</b><span>block ${fmtN(t.block)} · ${fmtAge(t.ts)} ago</span></div>
         <div class="kv"><b>decimals</b><span>${decimals}</span></div>
         <div class="kv"><b>supply</b><span>${supplyH}</span></div>
-        <div class="kv"><b>supply cap</b><span>${capH}</span></div>
-        ${live.currency?`<div class="kv"><b>currency</b><span>${esc(live.currency)}</span></div>`:""}
+        <div class="kv"><b>headroom</b><span>${headroom}</span></div>
+        ${currency?`<div class="kv"><b>stablecoin currency</b><span>${esc(currency)}</span></div>`:""}
         ${multiplier?`<div class="kv"><b>multiplier</b><span>${esc(multiplier)}</span></div>`:""}
         ${uri?`<div class="kv"><b>contract URI</b><a class="uri" href="${esc(uri)}" target="_blank" rel="noopener noreferrer">${esc(uri)}</a></div>`:""}
         <div class="kv"><b>holders</b><span>${fmtN(t.holder_count)}</span></div>
         <div class="kv"><b>chain read</b><span>${live.fetched_at?"live · "+fmtAge(live.fetched_at)+" ago":loading?"loading":"indexed"}</span></div>
-        <h3 style="margin-top:14px">top holders</h3>
-        ${(t.holders||[]).map(h=>`<div class="kv"><b>${h.account.slice(0,10)}…${h.account.slice(-4)}</b><span>${(BigInt(h.balance)/d).toLocaleString("en-US")}</span></div>`).join("")||(loading?'<div class="name">loading</div>':'<div class="name">none yet</div>')}
       </div>
       <div class="dcol">
-        <h3>recent events</h3>
-        ${(t.events||[]).map(e=>`<div class="ev"><span class="k">${e.kind}</span><span class="d">${esc(evSummary(e,t))}</span></div>`).join("")||(loading?'<div class="name">loading</div>':'<div class="name">none yet</div>')}
+        <h3>roles</h3>
+        ${roleLabels.map(k=>`<div class="kv"><b>${esc(k)}</b><span>${roles[k].map(esc).join(" / ")}</span></div>`).join("")||(loading?'<div class="name">loading</div>':'<div class="name">none decoded yet</div>')}
+        <h3 style="margin-top:14px">state</h3>
+        <div class="kv"><b>transfers</b><span>${paused.includes("transfers")?"paused":"active"}</span></div>
+        <div class="kv"><b>mint</b><span>${paused.includes("mint")?"paused":"active"}</span></div>
+        <div class="kv"><b>paused features</b><span>${paused.length?paused.map(esc).join(" / "):"none"}</span></div>
       </div>
-    </div>`;
-  $("#detail").classList.add("open");
-  if(scroll)window.scrollTo({top:$("#detail").offsetTop-80,behavior:"smooth"});
+      <div class="dcol">
+        <h3>activity</h3>
+        ${(t.events||[]).slice(0,12).map(e=>`<div class="ev"><span class="k">${e.kind}</span><span class="d">${esc(evSummary(e,t))}</span><span class="age">${fmtAge(e.ts)}</span></div>`).join("")||(loading?'<div class="name">loading</div>':'<div class="name">none yet</div>')}
+      </div>
+    </div></div>`;
 }
-function closeDetail(){$("#detail").classList.remove("open")}
+function closeDetail(e){e?.stopPropagation();activeDetailAddr="";renderRows()}
 function evSummary(e,t){
   const a=e.args,d=BigInt(10)**BigInt(t.live?.decimals??t.decimals??0);
   if(e.kind==="Transfer")return `${a.from.slice(0,8)} → ${a.to.slice(0,8)} · ${(BigInt(a.amount)/d).toLocaleString("en-US")}`;
@@ -375,8 +415,8 @@ document.querySelectorAll(".tab").forEach(b=>b.onclick=()=>{
 });
 let deb;$("#search").oninput=e=>{clearTimeout(deb);deb=setTimeout(()=>{search=e.target.value.trim();loadTokens()},250)};
 
-loadStats();loadTokens().then(loadFeed);
-setInterval(()=>{loadStats();loadTokens();loadFeed()},10000);
+loadStats();loadDeploys();loadTokens().then(loadFeed);
+setInterval(()=>{loadStats();loadDeploys();loadTokens();loadFeed()},10000);
 </script>
 </body>
 </html>
