@@ -101,6 +101,11 @@ tr.row:hover td{background:var(--panel)}
 .addr:hover .rest{color:var(--blue);border-color:var(--blue)}
 .bslink{color:var(--blue)}
 .bslink:hover{text-decoration:underline}
+.acct{display:inline-flex;align-items:center;gap:6px;justify-content:flex-end;flex-wrap:wrap}
+.acct-type{font-size:9px;font-weight:600;letter-spacing:.06em;padding:2px 5px;border:1px solid var(--line);color:var(--slate)}
+.acct-type.contract{border-color:#B42318;color:#B42318;background:#FFF4F2}
+.acct-type.eoa{border-color:var(--blue);color:var(--blue);background:var(--blue-wash)}
+.acct-type.unknown{color:var(--slate)}
 .chip{display:inline-block;font-size:10px;font-weight:600;padding:3px 8px;letter-spacing:.04em}
 .chip.a{background:var(--blue-wash);color:var(--blue-dark)}
 .chip.s{background:var(--ink);color:#fff}
@@ -253,7 +258,8 @@ const $=s=>document.querySelector(s);
 let variant="", search="", known=new Set(), seenEv=new Set(), firstLoad=true, allTokens=[], currentRows=[], activeDetailAddr="", activeDetailIndex=-1, activeDetailPane="overview", activeEventPage=0, activeDetailMode="inline";
 const tokenCache=new Map();
 const nameCache=new Map(), nameChecked=new Set();
-let namesLoading=false, tokenPage=1, tokenPageSize=50, tokenTotal=0, latestFeed=[];
+const accountTypeCache=new Map(), accountTypeChecked=new Set();
+let namesLoading=false, accountTypesLoading=false, tokenPage=1, tokenPageSize=50, tokenTotal=0, latestFeed=[];
 
 const BASESCAN="https://basescan.org";
 const UINT128_MAX=(1n<<128n)-1n;
@@ -267,6 +273,13 @@ const fmtAddr=a=>{
   return `<a class="addr bslink" href="${BASESCAN}/address/${a}" target="_blank" rel="noopener noreferrer" title="${esc(name?name+' · '+a:'open on BaseScan')}" data-a="${a}" data-address="${a.toLowerCase()}"><span class="pfx">${esc(pfx)}</span><span class="rest">${esc(rest)}</span></a>`;
 };
 const addrLink=a=>a?`<a class="bslink" href="${BASESCAN}/address/${a}" target="_blank" rel="noopener noreferrer" title="${esc(a)}" data-address="${a.toLowerCase()}">${esc(nameFor(a)||shortAddr(a))}</a>`:"—";
+const accountTypeFor=a=>a?accountTypeCache.get(a.toLowerCase()):null;
+function roleAccountLink(a){
+  if(!a)return "—";
+  const type=accountTypeFor(a);
+  const typeHtml=type?`<span class="acct-type ${esc(type.toLowerCase())}">${esc(type)}</span>`:'<span class="acct-type unknown">checking</span>';
+  return `<span class="acct" data-account-type="${a.toLowerCase()}">${addrLink(a)}${typeHtml}</span>`;
+}
 const txLink=tx=>tx?`<a class="bslink" href="${BASESCAN}/tx/${tx}" target="_blank" rel="noopener noreferrer">${tx.slice(0,10)}…${tx.slice(-6)}</a>`:"—";
 const blockLink=b=>b?`<a class="bslink" href="${BASESCAN}/block/${b}" target="_blank" rel="noopener noreferrer">${fmtN(b)}</a>`:"—";
 const fmtAge=ts=>{const s=Math.max(1,(Date.now()/1e3|0)-ts);if(s<60)return s+"s";if(s<3600)return (s/60|0)+"m";if(s<86400)return (s/3600|0)+"h";return (s/86400|0)+"d"};
@@ -441,7 +454,7 @@ function renderRows(){
     const detail=tokenCache.get(activeDetailAddr)||t;
     return row+`<tr class="detail-row"><td colspan="6">${detailHtml(detail, !detail.events)}</td></tr>`;
   }).join("");
-  loadVisibleNames();
+  loadVisibleAccountMeta();
 }
 
 function renderSpotlight(){
@@ -484,6 +497,11 @@ function setTokenPage(page){
   loadTokens();
 }
 
+function loadVisibleAccountMeta(){
+  loadVisibleNames();
+  loadVisibleAccountTypes();
+}
+
 async function loadVisibleNames(){
   if(namesLoading)return;
   const addresses=[...new Set([...document.querySelectorAll("[data-address]")]
@@ -507,6 +525,29 @@ async function loadVisibleNames(){
   }
 }
 
+async function loadVisibleAccountTypes(){
+  if(accountTypesLoading)return;
+  const addresses=[...new Set([...document.querySelectorAll("[data-account-type]")]
+    .map(el=>el.dataset.accountType)
+    .filter(a=>a&&!accountTypeChecked.has(a))
+  )].slice(0,50);
+  if(!addresses.length)return;
+  addresses.forEach(a=>accountTypeChecked.add(a));
+  accountTypesLoading=true;
+  try{
+    const types=await (await fetch("/api/account-types?addresses="+encodeURIComponent(addresses.join(",")))).json();
+    let changed=false;
+    Object.entries(types).forEach(([addr,type])=>{
+      if(type&&!accountTypeCache.has(addr)){accountTypeCache.set(addr,type);changed=true}
+    });
+    if(changed)renderRows();
+  }catch{
+    addresses.forEach(a=>accountTypeChecked.delete(a));
+  }finally{
+    accountTypesLoading=false;
+  }
+}
+
 /* live activity rail */
 async function loadFeed(){
   const feed=await (await fetch("/api/feed")).json();
@@ -519,7 +560,7 @@ async function loadFeed(){
       <span class="ft">$${esc(e.symbol)} · ${fmtAge(e.ts)}</span>
       <span class="fd">${esc(feedLine(e))}</span>
     </div>`}).join("");
-  loadVisibleNames();
+  loadVisibleAccountMeta();
 }
 function feedLine(e){
   const a=e.args;
@@ -550,9 +591,23 @@ function openFromFeed(e){
   openToken(e.token,paneForEvent(e.kind),seedFromFeed(e),"spotlight");
 }
 
-async function openToken(addr,pane=null,seed=null,mode="inline"){
+function tokenRoute(){
+  const m=location.pathname.match(/^\/token\/(0x[0-9a-fA-F]{40})$/);
+  return m?m[1]:null;
+}
+function setTokenRoute(addr,replace=false){
+  const path="/token/"+addr;
+  if(location.pathname===path)return;
+  history[replace?"replaceState":"pushState"]({token:addr},"",path);
+}
+function clearTokenRoute(){
+  if(tokenRoute())history.pushState({},"","/");
+}
+
+async function openToken(addr,pane=null,seed=null,mode="inline",opts={}){
   const nextAddr=addr.toLowerCase();
   if(activeDetailAddr===nextAddr && activeDetailMode===mode && tokenCache.get(nextAddr)?.events && pane===null){closeDetail();return}
+  if(opts.updateUrl!==false)setTokenRoute(addr,Boolean(opts.replaceUrl));
   if(activeDetailAddr!==nextAddr){activeDetailPane=pane||"overview";activeEventPage=0}
   else if(pane){activeDetailPane=pane;activeEventPage=0}
   activeDetailMode=mode;
@@ -614,6 +669,11 @@ function detailHtml(t,loading){
   const memo=memoRaw?memoText(memoRaw):null;
   const currency=live.currency||t.currency;
   const hasRole=label=>roleLabels.includes(label);
+  const adminAccounts=roles.ADMIN||[];
+  const adminTypes=adminAccounts.map(accountTypeFor).filter(Boolean);
+  const adminTypeLabel=adminAccounts.length
+    ? (adminTypes.length===adminAccounts.length?[...new Set(adminTypes)].join(" / "):"checking")
+    : "—";
   const adminActive=hasRole("ADMIN");
   const mintable=hasRole("MINT");
   const burnable=hasRole("BURN")||hasRole("BURN BLOCKED");
@@ -625,6 +685,7 @@ function detailHtml(t,loading){
     ["burning",burnable?"ENABLED":"not detected",burnable?"warn":"ok"],
     ["transfers",transferPaused?"PAUSED":"active",transferPaused?"warn":"ok"],
     ["metadata",metadataMutable?"MUTABLE":"fixed / not detected",metadataMutable?"warn":"ok"],
+    ["admin type",adminTypeLabel,adminTypes.includes("CONTRACT")?"warn":"ok"],
     ["supply cap",capH,uncapped?"warn":"ok"],
   ].map(([k,v,c])=>`<div class="ctl-item"><b>${esc(k)}</b><span class="${c}">${esc(v)}</span></div>`).join("");
   const paneButton=p=>`<button type="button" class="${activeDetailPane===p?"on":""}" onclick="setDetailPane(event,'${p}')">${p}</button>`;
@@ -656,6 +717,7 @@ function detailHtml(t,loading){
           <div class="kv"><b>age</b><span>${fmtAge(t.ts)} ago</span></div>
           <div class="kv"><b>block</b><span>${blockLink(t.block)}</span></div>
           <div class="kv"><b>deploy tx</b><span>${txLink(t.tx)}</span></div>
+          <div class="kv"><b>deployer</b><span>${t.creator?roleAccountLink(t.creator):"—"}</span></div>
           <div class="kv"><b>decimals</b><span>${decimals}</span></div>
           <div class="kv"><b>supply</b><span>${supplyH}</span></div>
           <div class="kv"><b>headroom</b><span>${headroom}</span></div>
@@ -670,7 +732,7 @@ function detailHtml(t,loading){
       <div class="dgrid">
         <div class="dcol">
           <h3>roles</h3>
-          ${roleLabels.map(k=>`<div class="kv"><b>${esc(k)}</b><span>${roles[k].map(addrLink).join(" / ")}</span></div>`).join("")||(loading?'<div class="name">loading</div>':'<div class="name">none decoded yet</div>')}
+          ${roleLabels.map(k=>`<div class="kv"><b>${esc(k)}</b><span>${roles[k].map(roleAccountLink).join(" / ")}</span></div>`).join("")||(loading?'<div class="name">loading</div>':'<div class="name">none decoded yet</div>')}
         </div>
         <div class="dcol">
           <h3>supply</h3>
@@ -698,7 +760,7 @@ function detailHtml(t,loading){
       </div>`)}
   </div>`;
 }
-function closeDetail(e){e?.stopPropagation();activeDetailAddr="";activeDetailIndex=-1;activeDetailMode="inline";renderRows()}
+function closeDetail(e){e?.stopPropagation();activeDetailAddr="";activeDetailIndex=-1;activeDetailMode="inline";clearTokenRoute();renderRows()}
 function setDetailPane(e,pane){e?.stopPropagation();activeDetailPane=pane;renderRows()}
 function setEventPage(e,page){e?.stopPropagation();activeEventPage=page;renderRows()}
 function activityPageHtml(t,loading){
@@ -806,11 +868,21 @@ $("#feed").addEventListener("click",e=>{
 
 document.querySelectorAll(".tab").forEach(b=>b.onclick=()=>{
   document.querySelectorAll(".tab").forEach(x=>x.classList.remove("on"));
-  b.classList.add("on");variant=b.dataset.v;tokenPage=1;activeDetailAddr="";activeDetailMode="inline";loadTokens();
+  b.classList.add("on");variant=b.dataset.v;tokenPage=1;activeDetailAddr="";activeDetailMode="inline";clearTokenRoute();loadTokens();
 });
-let deb;$("#search").oninput=e=>{clearTimeout(deb);deb=setTimeout(()=>{search=e.target.value.trim();tokenPage=1;activeDetailAddr="";activeDetailMode="inline";loadTokens()},250)};
+let deb;$("#search").oninput=e=>{clearTimeout(deb);deb=setTimeout(()=>{search=e.target.value.trim();tokenPage=1;activeDetailAddr="";activeDetailMode="inline";clearTokenRoute();loadTokens()},250)};
 
-loadStats();loadHealth();loadDeploys();loadTokens().then(loadFeed);
+window.addEventListener("popstate",()=>{
+  const addr=tokenRoute();
+  if(addr)openToken(addr,"overview",null,"spotlight",{updateUrl:false});
+  else{activeDetailAddr="";activeDetailIndex=-1;activeDetailMode="inline";renderRows()}
+});
+
+loadStats();loadHealth();loadDeploys();loadTokens().then(()=>{
+  loadFeed();
+  const addr=tokenRoute();
+  if(addr)openToken(addr,"overview",null,"spotlight",{replaceUrl:true});
+});
 setInterval(()=>{loadStats();loadHealth();loadDeploys();loadTokens();loadFeed()},10000);
 </script>
 </body>

@@ -56,6 +56,8 @@ const stmts = {
   setCursor: db.prepare("INSERT INTO meta(key,value) VALUES('cursor',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value"),
   insertToken: db.prepare(`INSERT OR IGNORE INTO tokens(address,variant,name,symbol,decimals,currency,creator,block,tx,ts)
     VALUES(@address,@variant,@name,@symbol,@decimals,@currency,@creator,@block,@tx,@ts)`),
+  setTokenCreator: db.prepare("UPDATE tokens SET creator=? WHERE address=? COLLATE NOCASE AND (creator IS NULL OR creator='')"),
+  tokensMissingCreator: db.prepare("SELECT address,tx FROM tokens WHERE (creator IS NULL OR creator='') AND tx IS NOT NULL ORDER BY block DESC LIMIT ?"),
   insertEvent: db.prepare(`INSERT OR IGNORE INTO events(token,kind,block,tx,log_index,ts,args,applied)
     VALUES(@token,@kind,@block,@tx,@log_index,@ts,@args,@applied)`),
   getEventApply: db.prepare("SELECT applied FROM events WHERE tx=? AND log_index=?"),
@@ -107,4 +109,20 @@ function applyTransfer(token, from, to, amount) {
   stmts.setSupplyHolders.run(supply.toString(), Math.max(0, holderCount), token);
 }
 
-module.exports = { db, stmts, applyTransfer };
+const insertTransferEventAndApply = db.transaction((event, args) => {
+  const inserted = stmts.insertEvent.run({ ...event, applied: 0 });
+  const state = stmts.getEventApply.get(event.tx, event.log_index);
+  if (state && !state.applied) {
+    applyTransfer(event.token, args.from, args.to, args.amount);
+    stmts.markEventApplied.run(event.tx, event.log_index);
+  }
+  return inserted.changes;
+});
+
+function insertEventAndMaybeApply(event, args, applyState) {
+  if (applyState && event.kind === "Transfer") return insertTransferEventAndApply(event, args);
+  const applied = event.kind === "Transfer" ? 0 : 1;
+  return stmts.insertEvent.run({ ...event, applied }).changes;
+}
+
+module.exports = { db, stmts, applyTransfer, insertEventAndMaybeApply };

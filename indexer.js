@@ -13,7 +13,7 @@
 require("dotenv").config();
 const { ethers } = require("ethers");
 const { FACTORY, TOPIC_CREATED, TOKEN_TOPICS, decodeCreated, decodeTokenLog } = require("./chain.js");
-const { db, stmts, applyTransfer } = require("./db.js");
+const { stmts, insertEventAndMaybeApply } = require("./db.js");
 
 const RPC_URL = process.env.RPC_URL || "https://mainnet.base.org";
 const CHAIN_ID = Number(process.env.CHAIN_ID || 8453);
@@ -27,6 +27,7 @@ const POLL_MS = Number(process.env.POLL_MS || 4000);
 const LIVE_CHUNK = Number(process.env.LIVE_CHUNK || 25);
 const LIVE_LOOKBACK = Number(process.env.LIVE_LOOKBACK || 300);
 const ONCE = process.argv.includes("--once");
+const FILL_CREATORS = process.argv.includes("--fill-creators");
 
 const provider = new ethers.JsonRpcProvider(RPC_URL, CHAIN_ID, {
   staticNetwork: ethers.Network.from(CHAIN_ID),
@@ -36,6 +37,7 @@ const provider = new ethers.JsonRpcProvider(RPC_URL, CHAIN_ID, {
   batchStallTime: 0,
 });
 const tsCache = new Map();
+const txFromCache = new Map();
 
 async function blockTs(bn) {
   if (!tsCache.has(bn)) {
@@ -54,6 +56,32 @@ function setCursor(key, value) {
   stmts.setMeta.run(key, String(value));
 }
 
+async function txFrom(hash) {
+  if (!hash) return null;
+  if (!txFromCache.has(hash)) {
+    try {
+      txFromCache.set(hash, (await provider.getTransaction(hash))?.from || null);
+    } catch {
+      txFromCache.set(hash, null);
+    }
+    if (txFromCache.size > 4096) txFromCache.delete(txFromCache.keys().next().value);
+  }
+  return txFromCache.get(hash);
+}
+
+async function fillMissingCreators(limit = 50) {
+  const rows = stmts.tokensMissingCreator.all(limit);
+  let n = 0;
+  for (const row of rows) {
+    const creator = await txFrom(row.tx);
+    if (!creator) continue;
+    stmts.setTokenCreator.run(creator, row.address);
+    n++;
+  }
+  if (n) console.log(`  creators -> +${n}`);
+  return n;
+}
+
 // --- factory: new tokens ---
 async function indexFactoryRange(from, to) {
   const logs = await provider.getLogs({ address: FACTORY, topics: [TOPIC_CREATED], fromBlock: from, toBlock: to });
@@ -66,11 +94,13 @@ async function indexFactoryRange(from, to) {
 
   for (const log of logs) {
     const t = decodeCreated(log);
+    const creator = await txFrom(log.transactionHash);
     stmts.insertToken.run({
       address: t.token, variant: t.variant, name: t.name, symbol: t.symbol,
-      decimals: t.decimals, currency: t.currency, creator: null,
+      decimals: t.decimals, currency: t.currency, creator,
       block: log.blockNumber, tx: log.transactionHash, ts: timestampFor(log.blockNumber),
     });
+    if (creator) stmts.setTokenCreator.run(creator, t.token);
     console.log(`+ token ${t.symbol} (${t.variant === 0 ? "ASSET" : "STABLE"}) ${t.token} @${log.blockNumber}`);
   }
   return logs.length;
@@ -81,25 +111,10 @@ async function indexFactoryRange(from, to) {
 async function insertDecodedTokenLog(log, timestamp, applyState) {
   const d = decodeTokenLog(log);
   if (!d) return 0;
-  const inserted = stmts.insertEvent.run({
+  return insertEventAndMaybeApply({
     token: log.address, kind: d.kind, block: log.blockNumber, tx: log.transactionHash,
     log_index: log.index, ts: timestamp, args: JSON.stringify(d.args),
-    applied: applyState ? 1 : 0,
-  });
-
-  if (applyState && d.kind === "Transfer") {
-    const state = stmts.getEventApply.get(log.transactionHash, log.index);
-    if (state && !state.applied) {
-      applyTransfer(log.address, d.args.from, d.args.to, d.args.amount);
-      stmts.markEventApplied.run(log.transactionHash, log.index);
-    }
-    else if (inserted.changes) {
-      applyTransfer(log.address, d.args.from, d.args.to, d.args.amount);
-      stmts.markEventApplied.run(log.transactionHash, log.index);
-    }
-  }
-
-  return inserted.changes;
+  }, d.args, Boolean(applyState));
 }
 
 async function indexTokenRange(from, to, opts = {}) {
@@ -184,6 +199,10 @@ async function drainLiveTokens(liveCursor, safeHead) {
 }
 
 async function main() {
+  if (FILL_CREATORS) {
+    while (await fillMissingCreators(100)) {}
+    return;
+  }
   const head = await provider.getBlockNumber();
   const safeHead = head - CONFIRMATIONS;
   const legacyCursor = Number(stmts.getCursor.get()?.value ?? START_BLOCK - 1);
@@ -201,6 +220,7 @@ async function main() {
   // never make the deployment list look days old.
   factoryCursor = await drainFactory(factoryCursor, safeHead);
   console.log("factory backfill complete");
+  await fillMissingCreators(ONCE ? 1000 : 50);
   if (!ONCE) liveTokenCursor = await drainLiveTokens(liveTokenCursor, safeHead);
   tokenCursor = await drainTokens(tokenCursor, factoryCursor, ONCE ? Infinity : 1);
   if (tokenCursor >= factoryCursor) console.log("event backfill complete");
@@ -212,6 +232,7 @@ async function main() {
     try {
       const h = (await provider.getBlockNumber()) - CONFIRMATIONS;
       factoryCursor = await drainFactory(factoryCursor, h);
+      await fillMissingCreators(25);
       liveTokenCursor = await drainLiveTokens(liveTokenCursor, h);
       tokenCursor = await drainTokens(tokenCursor, factoryCursor, 1);
     } catch (e) {

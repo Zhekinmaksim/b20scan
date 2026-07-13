@@ -37,9 +37,12 @@ const liveCache = new Map();
 const LIVE_CACHE_MS = 15_000;
 const LIVE_READ_TIMEOUT_MS = 2_500;
 const nameCache = new Map();
+const accountTypeCache = new Map();
 const NAME_CACHE_MS = 3_600_000;
 const NAME_READ_TIMEOUT_MS = 1_500;
 const NAME_API_TIMEOUT_MS = 1_200;
+const ACCOUNT_TYPE_CACHE_MS = 3_600_000;
+const ACCOUNT_TYPE_TIMEOUT_MS = 1_500;
 const ENS_REGISTRY_ADDRESS = "0x00000000000C2E074eC69A0dFb2997BA6C7d2e1e";
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 const ensRegistry = new ethers.Contract(
@@ -160,6 +163,22 @@ async function basenameFromProfile(address) {
   } catch {
     return null;
   }
+}
+
+async function accountTypeFor(address) {
+  const key = address.toLowerCase();
+  const cached = accountTypeCache.get(key);
+  if (cached && Date.now() - cached.at < ACCOUNT_TYPE_CACHE_MS) return cached.value;
+  let value = "EOA";
+  try {
+    const code = await withTimeout(provider.getCode(address), ACCOUNT_TYPE_TIMEOUT_MS);
+    value = code && code !== "0x" ? "CONTRACT" : "EOA";
+  } catch {
+    value = "UNKNOWN";
+  }
+  accountTypeCache.set(key, { at: Date.now(), value });
+  if (accountTypeCache.size > 4096) accountTypeCache.delete(accountTypeCache.keys().next().value);
+  return value;
 }
 
 function tokenFilter(variant, search) {
@@ -334,6 +353,19 @@ app.get("/api/names", async (req, res) => {
   res.json(out);
 });
 
+app.get("/api/account-types", async (req, res) => {
+  const raw = String(req.query.addresses || "");
+  const addresses = [...new Set(raw.split(",").map((a) => a.trim()).filter(Boolean))].slice(0, 50);
+  const out = {};
+  await Promise.all(addresses.map(async (addr) => {
+    try {
+      const checked = ethers.getAddress(addr);
+      out[checked.toLowerCase()] = await accountTypeFor(checked);
+    } catch { /* skip invalid address */ }
+  }));
+  res.json(out);
+});
+
 app.get("/api/tokens/:address/live", async (req, res) => {
   const t = q.token.get(req.params.address);
   if (!t) return res.status(404).json({ error: "token not found" });
@@ -360,6 +392,10 @@ app.get("/api/tokens/:address", (req, res) => {
 app.get("/api/feed", (_, res) =>
   res.json(q.feed.all().map((e) => ({ ...e, args: JSON.parse(e.args) })))
 );
+
+app.get("/token/:address", (_, res) => {
+  res.sendFile(path.join(__dirname, "public", "index.html"));
+});
 
 const PORT = Number(process.env.PORT || 3020);
 app.listen(PORT, () => console.log(`b20scan api+web on :${PORT}`));
