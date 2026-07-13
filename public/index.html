@@ -40,6 +40,9 @@ header{border-bottom:1px solid var(--ink)}
 .logo em{font-style:normal;color:var(--blue)}
 .net{margin-left:auto;font-size:12px;color:var(--slate);display:flex;align-items:center;gap:8px}
 .net b{color:var(--ink);font-weight:600}
+.health{font-size:10px;font-weight:600;letter-spacing:.08em;color:var(--slate)}
+.health.synced{color:var(--blue)}
+.health.lagging,.health.unavailable{color:#B42318}
 .dot{width:8px;height:8px;border-radius:50%;background:var(--slate);flex:none}
 .dot.live{background:var(--blue);animation:pulse 2s ease-in-out infinite}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
@@ -156,7 +159,7 @@ tr.row:hover td{background:var(--panel)}
 .activity-card{padding:14px 18px}
 .activity-card h3{font-size:11px;color:var(--slate);font-weight:500;margin-bottom:8px}
 .atable{border-top:1px solid var(--line)}
-.arow{display:grid;grid-template-columns:96px minmax(112px,1fr) minmax(112px,1fr) 76px minmax(92px,.85fr) minmax(120px,1fr) 58px;gap:12px;align-items:center;border-bottom:1px solid var(--line);font-size:12px;min-height:42px}
+.arow{display:grid;grid-template-columns:96px minmax(112px,1fr) minmax(112px,1fr) 92px minmax(92px,.85fr) minmax(120px,1fr) 58px;gap:12px;align-items:center;border-bottom:1px solid var(--line);font-size:12px;min-height:42px}
 .arow.head{min-height:34px;color:var(--slate);font-size:11px}
 .arow:not(.head):hover{background:var(--panel)}
 .arow.memo-row{background:var(--blue-wash)}
@@ -164,18 +167,41 @@ tr.row:hover td{background:var(--panel)}
 .arow .kind{font-weight:600;color:var(--blue)}
 .arow .amount,.arow .hash,.arow .age{text-align:right}
 .arow .memo{color:var(--blue-dark)}
+.ctl-profile{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));border-bottom:1px solid var(--line)}
+.ctl-item{padding:10px 18px;border-top:1px solid var(--line)}
+.ctl-item:nth-child(even){border-left:1px solid var(--line)}
+.ctl-item b{display:block;font-size:10px;color:var(--slate);font-weight:500;letter-spacing:.06em;text-transform:uppercase}
+.ctl-item span{display:block;margin-top:2px;font-size:12px}
+.ctl-item .ok{color:var(--blue-dark)}
+.ctl-item .warn{color:#B42318}
 .empty{padding:40px 10px;text-align:center;color:var(--slate);font-size:13px}
 footer{padding:26px 0 40px;color:var(--slate);font-size:11px;display:flex;gap:16px;flex-wrap:wrap}
 footer a{color:var(--blue);text-decoration:none}
 footer a:hover{text-decoration:underline}
-@media(max-width:900px){.wrap{padding:0 20px}.hd{padding:18px 20px}.main{grid-template-columns:1fr}.rail{position:static}.strip{grid-template-columns:repeat(3,1fr)}.pulse{grid-column:1/-1;border-left:0;padding-left:0}.stat{padding-left:12px}.bar input{width:100%;margin-left:0}.dgrid{grid-template-columns:1fr}.dcol:nth-child(even){border-left:0}.dcol:nth-child(n+2){border-top:1px solid var(--line)}}
+@media(max-width:900px){
+  body{overflow-x:hidden}.wrap{padding:0 20px}.hd{padding:18px 20px;align-items:flex-start}.main{grid-template-columns:1fr;gap:18px}.rail{position:static}.strip{grid-template-columns:repeat(3,1fr)}.pulse{grid-column:1/-1;border-left:0;padding-left:0}.stat{padding-left:12px}.bar input{width:100%;margin-left:0}.dgrid{grid-template-columns:1fr}.dcol:nth-child(even){border-left:0}.dcol:nth-child(n+2){border-top:1px solid var(--line)}
+  .net{max-width:190px;justify-content:flex-end;flex-wrap:wrap;gap:4px 7px;text-align:right;line-height:1.35}
+  .spotlight,.detail,.activity-card,.atable{max-width:100%;overflow:hidden}
+  .detail-row td{overflow:hidden}
+  .dh{padding:14px 12px;gap:8px}.dh .t{font-size:20px}.dh .x{margin-left:0}.dnav{padding:10px 12px}.dcol,.activity-card{padding:12px}
+  .ctl-profile{grid-template-columns:1fr}.ctl-item:nth-child(even){border-left:0}
+  .arow{grid-template-columns:minmax(0,1fr) auto auto;gap:5px 10px;padding:10px 0;min-height:0}
+  .arow.head{display:none}
+  .arow span{white-space:normal;min-width:0}
+  .arow .kind{grid-column:1}.arow .amount{grid-column:2;text-align:right}.arow .age{grid-column:3;text-align:right;color:var(--slate)}
+  .arow span:nth-child(2),.arow span:nth-child(3),.arow .memo,.arow .hash{grid-column:1/-1;text-align:left}
+  .arow span:nth-child(2)::before{content:"from ";color:var(--slate)}
+  .arow span:nth-child(3)::before{content:"to ";color:var(--slate)}
+  .arow .memo::before{content:"memo ";color:var(--slate)}
+  .arow .hash::before{content:"hash ";color:var(--slate)}
+}
 </style>
 </head>
 <body>
 <header><div class="wrap hd">
   <div class="sq"></div>
   <div class="logo">B20<em>SCAN</em></div>
-  <div class="net"><span class="dot" id="dot"></span>base mainnet · block <b id="cursor">—</b></div>
+  <div class="net"><span class="dot" id="dot"></span><span>base mainnet · block <b id="cursor">—</b></span><span class="health" id="health">checking</span></div>
 </div></header>
 
 <div class="ticker" id="ticker"><div class="tk-track" id="tk-track"></div></div>
@@ -230,6 +256,7 @@ const nameCache=new Map(), nameChecked=new Set();
 let namesLoading=false, tokenPage=1, tokenPageSize=50, tokenTotal=0, latestFeed=[];
 
 const BASESCAN="https://basescan.org";
+const UINT128_MAX=(1n<<128n)-1n;
 const shortAddr=a=>a?`${a.slice(0,6)}…${a.slice(-4)}`:"—";
 const trimLabel=s=>s.length>22?s.slice(0,19)+"…":s;
 const nameFor=a=>a?nameCache.get(a.toLowerCase()):null;
@@ -246,6 +273,32 @@ const fmtAge=ts=>{const s=Math.max(1,(Date.now()/1e3|0)-ts);if(s<60)return s+"s"
 const fmtDate=ts=>ts?new Date(ts*1000).toLocaleString("en-US",{month:"short",day:"numeric",year:"numeric",hour:"2-digit",minute:"2-digit"}):"—";
 const fmtN=n=>Number(n).toLocaleString("en-US");
 const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+function fmtUnits(raw,decimals=0,opts={}){
+  if(raw===undefined||raw===null||raw==="")return "—";
+  try{
+    let value=BigInt(raw),neg=value<0n;if(neg)value=-value;
+    const d=BigInt(10)**BigInt(Math.max(0,Number(decimals)||0));
+    const whole=value/d,frac=value%d;
+    const compact=opts.compact!==false;
+    if(compact&&frac===0n){
+      const n=Number(whole);
+      if(Number.isSafeInteger(n)&&n>=1_000_000_000)return (n/1_000_000_000).toLocaleString("en-US",{maximumFractionDigits:2})+"B";
+      if(Number.isSafeInteger(n)&&n>=1_000_000)return (n/1_000_000).toLocaleString("en-US",{maximumFractionDigits:2})+"M";
+    }
+    let out=whole.toLocaleString("en-US");
+    if(frac){
+      let f=frac.toString().padStart(Number(decimals),"0").replace(/0+$/,"");
+      const max=opts.maxDecimals??6;
+      if(f.length>max)f=f.slice(0,max).replace(/0+$/,"");
+      if(f)out+="."+f;
+    }
+    return neg?"-"+out:out;
+  }catch{return String(raw)}
+}
+function fmtMultiplier(raw){
+  const v=fmtUnits(raw,18,{compact:false,maxDecimals:6});
+  return v==="—"?null:`${v}×`;
+}
 
 /* count-up animation for stats */
 function countTo(el,target){
@@ -258,12 +311,34 @@ function countTo(el,target){
 }
 
 async function loadStats(){
-  const s=await (await fetch("/api/stats")).json();
-  countTo($("#s-tokens"),s.tokens);countTo($("#s-assets"),s.assets);
-  countTo($("#s-stables"),s.stables);countTo($("#s-transfers"),s.transfers);
-  countTo($("#s-memos"),s.memos);
-  $("#cursor").textContent=s.cursor?fmtN(s.cursor):"—";
-  $("#dot").classList.add("live");
+  try{
+    const s=await (await fetch("/api/stats")).json();
+    countTo($("#s-tokens"),s.tokens);countTo($("#s-assets"),s.assets);
+    countTo($("#s-stables"),s.stables);countTo($("#s-transfers"),s.transfers);
+    countTo($("#s-memos"),s.memos);
+    $("#cursor").textContent=s.cursor?fmtN(s.cursor):"—";
+    $("#dot").classList.add("live");
+  }catch{
+    $("#dot").classList.remove("live");
+    $("#health").textContent="API unavailable";
+    $("#health").className="health unavailable";
+  }
+}
+
+async function loadHealth(){
+  try{
+    const h=await (await fetch("/api/health")).json();
+    if(h.chainHead)$("#cursor").textContent=fmtN(h.chainHead);
+    const last=h.lastEventTs?` · last ${fmtAge(h.lastEventTs)} ago`:"";
+    const lag=h.lagBlocks!=null?` · lag ${fmtN(h.lagBlocks)}`:"";
+    $("#health").textContent=`${String(h.status||"unknown").toUpperCase()}${lag}${last}`;
+    $("#health").className="health "+(h.status==="synced"?"synced":h.status==="unavailable"?"unavailable":"lagging");
+    $("#dot").classList.toggle("live",h.status!=="unavailable");
+  }catch{
+    $("#health").textContent="STATUS UNAVAILABLE";
+    $("#health").className="health unavailable";
+    $("#dot").classList.remove("live");
+  }
 }
 
 /* ticker: newest 12 tokens, duplicated for a seamless loop */
@@ -296,10 +371,19 @@ async function loadTokens(){
   const pageParams=new URLSearchParams(p);
   pageParams.set("limit",tokenPageSize);
   pageParams.set("offset",(tokenPage-1)*tokenPageSize);
-  const [list,count]=await Promise.all([
-    (await fetch("/api/tokens?"+pageParams)).json(),
-    (await fetch("/api/tokens/count?"+p)).json(),
-  ]);
+  let list,count;
+  try{
+    [list,count]=await Promise.all([
+      (await fetch("/api/tokens?"+pageParams)).json(),
+      (await fetch("/api/tokens/count?"+p)).json(),
+    ]);
+  }catch{
+    $("#rows").innerHTML="";
+    $("#empty").hidden=false;
+    $("#empty").textContent="Indexer temporarily unavailable.";
+    return;
+  }
+  $("#empty").textContent="No tokens match. The indexer may still be backfilling.";
   tokenTotal=Number(count.total||0);
   const maxPage=Math.max(1,Math.ceil(tokenTotal/tokenPageSize));
   if(tokenPage>maxPage){tokenPage=maxPage;return loadTokens()}
@@ -517,17 +601,31 @@ function detailHtml(t,loading){
   const policy=controls.policy||{};
   const policyValues=Object.values(policy).filter(v=>v!==undefined&&v!==null);
   const decimals=live.decimals??t.decimals??0;
-  const d=BigInt(10)**BigInt(decimals);
   const supply=live.total_supply??t.total_supply??"0";
   const supplyCap=live.supply_cap??controls.supply_cap;
-  const supplyH=(BigInt(supply)/d).toLocaleString("en-US");
-  const capH=supplyCap===null||supplyCap===undefined?"—":(BigInt(supplyCap)/d).toLocaleString("en-US");
-  const headroom=supplyCap===null||supplyCap===undefined?"—":((BigInt(supplyCap)-BigInt(supply))/d).toLocaleString("en-US");
+  const uncapped=supplyCap!==null&&supplyCap!==undefined&&BigInt(supplyCap)===UINT128_MAX;
+  const supplyH=fmtUnits(supply,decimals);
+  const capH=supplyCap===null||supplyCap===undefined?"—":uncapped?"UNCAPPED":fmtUnits(supplyCap,decimals);
+  const headroom=supplyCap===null||supplyCap===undefined?"—":uncapped?"∞":fmtUnits(BigInt(supplyCap)-BigInt(supply),decimals);
   const liveName=live.name||t.name, liveSymbol=live.symbol||t.symbol;
-  const multiplier=live.multiplier?`${Number(live.multiplier)/1e18}×`:null;
+  const multiplier=live.multiplier?fmtMultiplier(live.multiplier):null;
   const uri=/^(https?:\/\/|ipfs:\/\/)/i.test(live.contract_uri||"")?live.contract_uri:null;
   const memo=controls.memo||(t.events||[]).find(e=>e.kind==="Memo")?.args?.memo;
   const currency=live.currency||t.currency;
+  const hasRole=label=>roleLabels.includes(label);
+  const adminActive=hasRole("ADMIN");
+  const mintable=hasRole("MINT");
+  const burnable=hasRole("BURN")||hasRole("BURN BLOCKED");
+  const metadataMutable=hasRole("META");
+  const transferPaused=paused.includes("TRANSFER");
+  const controlProfile=[
+    ["administration",adminActive?"ACTIVE":"RENOUNCED",adminActive?"warn":"ok"],
+    ["minting",mintable?"ENABLED":"not detected",mintable?"warn":"ok"],
+    ["burning",burnable?"ENABLED":"not detected",burnable?"warn":"ok"],
+    ["transfers",transferPaused?"PAUSED":"active",transferPaused?"warn":"ok"],
+    ["metadata",metadataMutable?"MUTABLE":"fixed / not detected",metadataMutable?"warn":"ok"],
+    ["supply cap",capH,uncapped?"warn":"ok"],
+  ].map(([k,v,c])=>`<div class="ctl-item"><b>${esc(k)}</b><span class="${c}">${esc(v)}</span></div>`).join("");
   const paneButton=p=>`<button type="button" class="${activeDetailPane===p?"on":""}" onclick="setDetailPane(event,'${p}')">${p}</button>`;
   const pane=(p,html)=>`<div class="pane ${activeDetailPane===p?"on":""}">${html}</div>`;
   return `<div class="detail">
@@ -537,6 +635,7 @@ function detailHtml(t,loading){
       <button class="x" type="button" onclick="closeDetail(event)">close</button>
     </div>
     <div class="dnav">${paneButton("overview")}${paneButton("controls")}${paneButton("activity")}</div>
+    <div class="ctl-profile">${controlProfile}</div>
     ${pane("overview",`
       <div class="dgrid">
         <div class="dcol">
@@ -580,8 +679,9 @@ function detailHtml(t,loading){
         </div>
         <div class="dcol">
           <h3>state</h3>
-          <div class="kv"><b>transfers</b><span>${paused.includes("transfers")?"paused":"active"}</span></div>
-          <div class="kv"><b>mint</b><span>${paused.includes("mint")?"paused":"active"}</span></div>
+          <div class="kv"><b>transfers</b><span>${paused.includes("TRANSFER")?"paused":"active"}</span></div>
+          <div class="kv"><b>mint</b><span>${paused.includes("MINT")?"paused":"active"}</span></div>
+          <div class="kv"><b>burn</b><span>${paused.includes("BURN")?"paused":"active"}</span></div>
           <div class="kv"><b>paused features</b><span>${paused.length?paused.map(esc).join(" / "):"none"}</span></div>
         </div>
         <div class="dcol">
@@ -629,11 +729,10 @@ function eventHtml(e,t){
 function setEventPageNumber(page){setEventPage(null,page-1)}
 function addressCell(a){return a&&/^0x[0-9a-fA-F]{40}$/.test(a)?addrLink(a):esc(a||"—")}
 function amountFor(raw,decimals){
-  if(raw===undefined||raw===null||raw==="")return "—";
-  try{return (BigInt(raw)/(BigInt(10)**BigInt(decimals))).toLocaleString("en-US")}catch{return String(raw)}
+  return fmtUnits(raw,decimals);
 }
 function eventParts(e,t){
-  const a=e.args,d=BigInt(10)**BigInt(t.live?.decimals??t.decimals??0);
+  const a=e.args;
   if(e.kind==="Transfer")return {from:a.from,to:a.to,amount:amountFor(a.amount,t.live?.decimals??t.decimals??0),memo:"—"};
   if(e.kind==="Memo")return {from:a.from||a.account||a.sender,to:a.to,amount:amountFor(a.amount,t.live?.decimals??t.decimals??0),memo:a.memo||"—"};
   if(e.kind==="SupplyCapUpdated")return {from:"—",to:"—",amount:amountFor(a.newSupplyCap,t.live?.decimals??t.decimals??0),memo:"supply cap updated"};
@@ -669,8 +768,8 @@ document.querySelectorAll(".tab").forEach(b=>b.onclick=()=>{
 });
 let deb;$("#search").oninput=e=>{clearTimeout(deb);deb=setTimeout(()=>{search=e.target.value.trim();tokenPage=1;activeDetailAddr="";activeDetailMode="inline";loadTokens()},250)};
 
-loadStats();loadDeploys();loadTokens().then(loadFeed);
-setInterval(()=>{loadStats();loadDeploys();loadTokens();loadFeed()},10000);
+loadStats();loadHealth();loadDeploys();loadTokens().then(loadFeed);
+setInterval(()=>{loadStats();loadHealth();loadDeploys();loadTokens();loadFeed()},10000);
 </script>
 </body>
 </html>

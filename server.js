@@ -4,7 +4,7 @@ require("dotenv").config();
 const express = require("express");
 const path = require("path");
 const { ethers } = require("ethers");
-const { db } = require("./db.js");
+const { db, stmts } = require("./db.js");
 
 const app = express();
 app.use(express.static(path.join(__dirname, "public")));
@@ -55,14 +55,19 @@ const DEPLOY_SERIES_CACHE_MS = 30_000;
 const ZERO_ROLE = "0x0000000000000000000000000000000000000000000000000000000000000000";
 const ROLE_NAMES = new Map([
   [ZERO_ROLE, "ADMIN"],
+  [ethers.id("DEFAULT_ADMIN_ROLE").toLowerCase(), "ADMIN"],
   [ethers.id("MINTER_ROLE").toLowerCase(), "MINT"],
   [ethers.id("MINT_ROLE").toLowerCase(), "MINT"],
+  [ethers.id("BURN_ROLE").toLowerCase(), "BURN"],
+  [ethers.id("BURN_BLOCKED_ROLE").toLowerCase(), "BURN BLOCKED"],
   [ethers.id("PAUSER_ROLE").toLowerCase(), "PAUSE"],
   [ethers.id("PAUSE_ROLE").toLowerCase(), "PAUSE"],
+  [ethers.id("UNPAUSE_ROLE").toLowerCase(), "UNPAUSE"],
   [ethers.id("METADATA_ROLE").toLowerCase(), "META"],
   [ethers.id("META_ROLE").toLowerCase(), "META"],
+  [ethers.id("OPERATOR_ROLE").toLowerCase(), "OPERATOR"],
 ]);
-const PAUSE_FEATURES = ["transfers", "mint", "burn", "memo", "metadata"];
+const PAUSE_FEATURES = ["TRANSFER", "MINT", "BURN"];
 
 function roleName(role) {
   return ROLE_NAMES.get(String(role).toLowerCase()) || `${String(role).slice(0, 10)}...`;
@@ -188,6 +193,7 @@ const q = {
   tokenControlEvents: db.prepare("SELECT kind,args,block,log_index FROM events WHERE token=? COLLATE NOCASE AND kind IN ('RoleGranted','RoleRevoked','Paused','Unpaused','PolicyUpdated','SupplyCapUpdated','Memo') ORDER BY block ASC, log_index ASC"),
   tokenHolders: db.prepare("SELECT account,balance FROM holders WHERE token=? COLLATE NOCASE ORDER BY LENGTH(balance) DESC, balance DESC LIMIT 20"),
   deployTimes: db.prepare("SELECT ts FROM tokens WHERE ts IS NOT NULL ORDER BY ts ASC"),
+  lastEvent: db.prepare("SELECT MAX(ts) ts, MAX(block) block FROM events"),
   feed: db.prepare(`SELECT kind,block,tx,ts,args,token,symbol FROM (
     SELECT e.kind,e.block,e.tx,e.ts,e.args,e.token,t.symbol FROM events e JOIN tokens t ON t.address=e.token
     UNION ALL
@@ -236,7 +242,7 @@ function controlsFor(address, tokenRow) {
     } else if (row.kind === "Paused" || row.kind === "Unpaused") {
       const features = Array.isArray(a.features) ? a.features : [];
       for (const f of features) {
-        const label = PAUSE_FEATURES[Number(f)] || `feature #${f}`;
+        const label = PAUSE_FEATURES[Number(f)] || `UNKNOWN FEATURE #${f}`;
         if (row.kind === "Paused") paused.add(label);
         else paused.delete(label);
       }
@@ -265,6 +271,38 @@ function controlsFor(address, tokenRow) {
 app.get("/api/stats", (_, res) => res.json(q.stats.get()));
 
 app.get("/api/deploys", (_, res) => res.json(deploySeries()));
+
+app.get("/api/health", async (_, res) => {
+  try {
+    const chainHead = await withTimeout(provider.getBlockNumber(), 2_000);
+    const factoryCursor = Number(stmts.getMeta.get("factory_cursor")?.value || stmts.getMeta.get("cursor")?.value || 0);
+    const eventCursor = Number(stmts.getMeta.get("token_cursor")?.value || 0);
+    const liveCursor = Number(stmts.getMeta.get("live_token_cursor")?.value || 0);
+    const cursor = Math.max(factoryCursor, eventCursor, liveCursor);
+    const lagBlocks = Math.max(0, chainHead - cursor);
+    const lastEvent = q.lastEvent.get();
+    res.json({
+      status: lagBlocks <= 60 ? "synced" : lagBlocks <= 600 ? "catching_up" : "lagging",
+      chainHead,
+      factoryCursor,
+      eventCursor,
+      liveCursor,
+      cursor,
+      lagBlocks,
+      lastEventTs: lastEvent?.ts || null,
+      lastEventBlock: lastEvent?.block || null,
+      database: "ok",
+      checkedAt: Math.floor(Date.now() / 1000),
+    });
+  } catch (e) {
+    res.status(503).json({
+      status: "unavailable",
+      database: "ok",
+      error: e.shortMessage || e.message,
+      checkedAt: Math.floor(Date.now() / 1000),
+    });
+  }
+});
 
 app.get("/api/tokens", (req, res) => {
   const variant = req.query.variant === "asset" ? 0 : req.query.variant === "stablecoin" ? 1 : null;
