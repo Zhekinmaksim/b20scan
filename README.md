@@ -26,6 +26,11 @@ a new token within seconds, API and frontend serve it all.
     node indexer.js         # backfill from activation, then follow head
     node server.js          # in a second terminal -> http://localhost:3020
 
+To backfill deployers on an existing database that was indexed before creator
+lookups were enabled:
+
+    node indexer.js --fill-creators
+
 `START_BLOCK=48372133` is the first Base block at or after B20 activation
 (July 8, 2026, 18:00 UTC; block timestamp is 18:00:13 UTC on
 [BaseScan](https://basescan.org/block/48372133)). It is the default in both
@@ -55,10 +60,20 @@ while its initial backfill is still running.
 - Idempotency: UNIQUE(tx, log_index) makes overlapping ranges harmless.
 - Holder balances and total supply are computed in BigInt from Transfer events;
   SQLite never does arithmetic on them (int64 overflows at 18 decimals).
+- Transfer application is atomic: the event insert, holder/supply updates,
+  transfer counter update, and `applied=1` marker run in one SQLite
+  transaction. If the process dies mid-write, a restart can safely re-apply
+  any unapplied transfer.
 - Stablecoin currency codes are decoded from `variantEventParams` in the
   creation event - no extra RPC call per token.
 - Creator = tx.from of the creation transaction (one extra call per token,
-  backfill only).
+  plus the `--fill-creators` helper for older databases).
+- Memo events are correlated to the operation they annotate by `(tx,
+  log_index - 1)`. The UI shows the decoded printable memo on the Transfer row
+  and keeps the raw bytes32 in the tooltip.
+- Controller addresses in issuer roles are typed through `eth_getCode`, so the
+  frontend can show `CONTRACT`, `EOA`, or `UNKNOWN` next to ADMIN/MINT/META/
+  OPERATOR accounts.
 - Token-level logs are fetched with address-array getLogs in batches of 100
   tokens; as the token set grows past ~1-2k, switch this to a topic-first
   strategy or a proper indexing service. This is the known v1 scaling limit.
@@ -71,8 +86,14 @@ while its initial backfill is still running.
 ## API
 
     GET /api/stats                          counts + cursor
+    GET /api/health                         chain head, cursors, lag, last event
+    GET /api/deploys                        all-time deploy histogram buckets
     GET /api/tokens?variant=&q=&limit=      newest first
+    GET /api/tokens/count?variant=&q=       count for paginated token lists
     GET /api/tokens/:address                detail + events + top holders
+    GET /api/tokens/:address/live           live name/symbol/supply/cap reads
+    GET /api/names?addresses=0x...,0x...    Base names for visible addresses
+    GET /api/account-types?addresses=...    EOA/CONTRACT/UNKNOWN labels
     GET /api/feed                           latest events across all tokens
 
 ## Frontend
@@ -82,3 +103,13 @@ Base brand: white field, Base Blue #0052FF, ink #0A0B0D, Space Grotesk display
 0xB200 prefix as a solid blue block - the standard's own visual DNA. Auto
 refreshes every 10s; new tokens flash in. Variant filter runs on the indexed
 variant field (stablecoins even carry their currency code in the chip).
+
+Shareable token URLs are served by Express and hydrated by the single-page app:
+
+    https://b20scan.live/token/0xB200...
+
+Token cards are split into `overview`, `controls`, and `activity`. The controls
+pane highlights active administration, minting, burn support, pause state,
+metadata mutability, supply cap, and admin account type. The activity pane is
+paginated 20 events at a time and includes event, from, to, amount, memo, hash,
+and age columns with BaseScan links.
