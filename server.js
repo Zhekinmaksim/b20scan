@@ -200,6 +200,7 @@ const q = {
     (SELECT COUNT(*) FROM tokens WHERE variant=0) assets,
     (SELECT COUNT(*) FROM tokens WHERE variant=1) stables,
     (SELECT COUNT(*) FROM events WHERE kind='Transfer') transfers,
+    (SELECT COUNT(DISTINCT account) FROM holders) holders,
     (SELECT COUNT(*) FROM events WHERE kind='Memo') memos,
     (SELECT value FROM meta WHERE key='cursor') cursor,
     (SELECT value FROM meta WHERE key='token_cursor') event_cursor`),

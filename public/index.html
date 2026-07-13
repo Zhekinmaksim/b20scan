@@ -217,7 +217,7 @@ footer a:hover{text-decoration:underline}
   <div class="stat"><div class="n" id="s-assets">0</div><div class="l">asset</div></div>
   <div class="stat"><div class="n" id="s-stables">0</div><div class="l">stablecoin</div></div>
   <div class="stat"><div class="n" id="s-transfers">0</div><div class="l">transfers</div></div>
-  <div class="stat"><div class="n" id="s-memos">0</div><div class="l">memos</div></div>
+  <div class="stat"><div class="n" id="s-holders">0</div><div class="l">holders</div></div>
   <div class="pulse"><div class="l">deploys · all time</div><div class="bars" id="bars"></div></div>
 </div>
 
@@ -331,7 +331,7 @@ async function loadStats(){
     const s=await (await fetch("/api/stats")).json();
     countTo($("#s-tokens"),s.tokens);countTo($("#s-assets"),s.assets);
     countTo($("#s-stables"),s.stables);countTo($("#s-transfers"),s.transfers);
-    countTo($("#s-memos"),s.memos);
+    countTo($("#s-holders"),s.holders);
     $("#cursor").textContent=s.cursor?fmtN(s.cursor):"—";
     $("#dot").classList.add("live");
   }catch{
