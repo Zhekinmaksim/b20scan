@@ -42,7 +42,8 @@ const NAME_CACHE_MS = 3_600_000;
 const NAME_READ_TIMEOUT_MS = 1_500;
 const NAME_API_TIMEOUT_MS = 1_200;
 const ACCOUNT_TYPE_CACHE_MS = 3_600_000;
-const ACCOUNT_TYPE_TIMEOUT_MS = 1_500;
+const ACCOUNT_TYPE_UNKNOWN_CACHE_MS = 10_000;
+const ACCOUNT_TYPE_TIMEOUT_MS = 2_500;
 const ENS_REGISTRY_ADDRESS = "0x00000000000C2E074eC69A0dFb2997BA6C7d2e1e";
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 const ensRegistry = new ethers.Contract(
@@ -168,7 +169,10 @@ async function basenameFromProfile(address) {
 async function accountTypeFor(address) {
   const key = address.toLowerCase();
   const cached = accountTypeCache.get(key);
-  if (cached && Date.now() - cached.at < ACCOUNT_TYPE_CACHE_MS) return cached.value;
+  if (cached) {
+    const ttl = cached.value === "UNKNOWN" ? ACCOUNT_TYPE_UNKNOWN_CACHE_MS : ACCOUNT_TYPE_CACHE_MS;
+    if (Date.now() - cached.at < ttl) return cached.value;
+  }
   let value = "EOA";
   try {
     const code = await withTimeout(provider.getCode(address), ACCOUNT_TYPE_TIMEOUT_MS);

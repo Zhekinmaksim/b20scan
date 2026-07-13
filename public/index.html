@@ -505,12 +505,24 @@ function loadVisibleAccountMeta(){
   loadVisibleAccountTypes();
 }
 
+function orderedDatasetValues(selector, prioritySelector, key){
+  const seen=new Set(), out=[];
+  [...document.querySelectorAll(prioritySelector),...document.querySelectorAll(selector)].forEach(el=>{
+    const value=el.dataset[key];
+    if(!value)return;
+    const normalized=String(value).toLowerCase();
+    if(seen.has(normalized))return;
+    seen.add(normalized);
+    out.push(normalized);
+  });
+  return out;
+}
+
 async function loadVisibleNames(){
   if(namesLoading)return;
-  const addresses=[...new Set([...document.querySelectorAll("[data-address]")]
-    .map(el=>el.dataset.address)
-    .filter(a=>a&&!nameChecked.has(a))
-  )].slice(0,50);
+  const addresses=orderedDatasetValues("[data-address]",".spotlight [data-address], .detail-row [data-address]","address")
+    .filter(a=>!nameChecked.has(a))
+    .slice(0,50);
   if(!addresses.length)return;
   addresses.forEach(a=>nameChecked.add(a));
   namesLoading=true;
@@ -530,10 +542,9 @@ async function loadVisibleNames(){
 
 async function loadVisibleAccountTypes(){
   if(accountTypesLoading)return;
-  const addresses=[...new Set([...document.querySelectorAll("[data-account-type]")]
-    .map(el=>el.dataset.accountType)
-    .filter(a=>a&&!accountTypeChecked.has(a))
-  )].slice(0,50);
+  const addresses=orderedDatasetValues("[data-account-type]",".spotlight [data-account-type], .detail-row [data-account-type]","accountType")
+    .filter(a=>!accountTypeChecked.has(a))
+    .slice(0,50);
   if(!addresses.length)return;
   addresses.forEach(a=>accountTypeChecked.add(a));
   accountTypesLoading=true;
@@ -541,7 +552,9 @@ async function loadVisibleAccountTypes(){
     const types=await (await fetch("/api/account-types?addresses="+encodeURIComponent(addresses.join(",")))).json();
     let changed=false;
     Object.entries(types).forEach(([addr,type])=>{
-      if(type&&!accountTypeCache.has(addr)){accountTypeCache.set(addr,type);changed=true}
+      const key=addr.toLowerCase();
+      if(type==="UNKNOWN"){accountTypeCache.delete(key);accountTypeChecked.delete(key);return}
+      if(type&&accountTypeCache.get(key)!==type){accountTypeCache.set(key,type);changed=true}
     });
     if(changed)renderRows();
   }catch{
