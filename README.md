@@ -71,9 +71,10 @@ while its initial backfill is still running.
 - Memo events are correlated to the operation they annotate by `(tx,
   log_index - 1)`. The UI shows the decoded printable memo on the Transfer row
   and keeps the raw bytes32 in the tooltip.
-- Controller addresses in issuer roles are typed through `eth_getCode`, so the
-  frontend can show `CONTRACT`, `EOA`, or `UNKNOWN` next to ADMIN/MINT/META/
-  OPERATOR accounts.
+- Controller addresses in issuer roles are typed through `eth_getCode`. Plain
+  empty-code accounts show as `EOA`, EIP-7702 delegated wallets show as
+  `SMART EOA`, normal bytecode accounts show as `CONTRACT`, and timeouts show
+  as `UNKNOWN`.
 - Token-level logs are fetched with address-array getLogs in batches of 100
   tokens; as the token set grows past ~1-2k, switch this to a topic-first
   strategy or a proper indexing service. This is the known v1 scaling limit.
@@ -93,7 +94,7 @@ while its initial backfill is still running.
     GET /api/tokens/:address                detail + events + top holders
     GET /api/tokens/:address/live           live name/symbol/supply/cap reads
     GET /api/names?addresses=0x...,0x...    Base names for visible addresses
-    GET /api/account-types?addresses=...    EOA/CONTRACT/UNKNOWN labels
+    GET /api/account-types?addresses=...    EOA/SMART_EOA/CONTRACT/UNKNOWN labels
     GET /api/feed                           latest events across all tokens
 
 ## Frontend

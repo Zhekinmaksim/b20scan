@@ -105,6 +105,7 @@ tr.row:hover td{background:var(--panel)}
 .acct-type{font-size:9px;font-weight:600;letter-spacing:.06em;padding:2px 5px;border:1px solid var(--line);color:var(--slate)}
 .acct-type.contract{border-color:#B42318;color:#B42318;background:#FFF4F2}
 .acct-type.eoa{border-color:var(--blue);color:var(--blue);background:var(--blue-wash)}
+.acct-type.smart_eoa{border-color:var(--blue);color:var(--blue);background:var(--blue-wash)}
 .acct-type.unknown{color:var(--slate)}
 .chip{display:inline-block;font-size:10px;font-weight:600;padding:3px 8px;letter-spacing:.04em}
 .chip.a{background:var(--blue-wash);color:var(--blue-dark)}
@@ -274,10 +275,12 @@ const fmtAddr=a=>{
 };
 const addrLink=a=>a?`<a class="bslink" href="${BASESCAN}/address/${a}" target="_blank" rel="noopener noreferrer" title="${esc(a)}" data-address="${a.toLowerCase()}">${esc(nameFor(a)||shortAddr(a))}</a>`:"—";
 const accountTypeFor=a=>a?accountTypeCache.get(a.toLowerCase()):null;
+const accountTypeLabel=t=>String(t||"").replace(/_/g," ");
+const accountTypeClass=t=>esc(String(t||"unknown").toLowerCase().replace(/[^a-z0-9]+/g,"_"));
 function roleAccountLink(a){
   if(!a)return "—";
   const type=accountTypeFor(a);
-  const typeHtml=type?`<span class="acct-type ${esc(type.toLowerCase())}">${esc(type)}</span>`:'<span class="acct-type unknown">checking</span>';
+  const typeHtml=type?`<span class="acct-type ${accountTypeClass(type)}">${esc(accountTypeLabel(type))}</span>`:'<span class="acct-type unknown">checking</span>';
   return `<span class="acct" data-account-type="${a.toLowerCase()}">${addrLink(a)}${typeHtml}</span>`;
 }
 const txLink=tx=>tx?`<a class="bslink" href="${BASESCAN}/tx/${tx}" target="_blank" rel="noopener noreferrer">${tx.slice(0,10)}…${tx.slice(-6)}</a>`:"—";
@@ -672,7 +675,7 @@ function detailHtml(t,loading){
   const adminAccounts=roles.ADMIN||[];
   const adminTypes=adminAccounts.map(accountTypeFor).filter(Boolean);
   const adminTypeLabel=adminAccounts.length
-    ? (adminTypes.length===adminAccounts.length?[...new Set(adminTypes)].join(" / "):"checking")
+    ? (adminTypes.length===adminAccounts.length?[...new Set(adminTypes.map(accountTypeLabel))].join(" / "):"checking")
     : "—";
   const adminActive=hasRole("ADMIN");
   const mintable=hasRole("MINT");

@@ -172,7 +172,9 @@ async function accountTypeFor(address) {
   let value = "EOA";
   try {
     const code = await withTimeout(provider.getCode(address), ACCOUNT_TYPE_TIMEOUT_MS);
-    value = code && code !== "0x" ? "CONTRACT" : "EOA";
+    if (code && code !== "0x") {
+      value = /^0xef0100[0-9a-fA-F]{40}$/.test(code) ? "SMART_EOA" : "CONTRACT";
+    }
   } catch {
     value = "UNKNOWN";
   }
