@@ -189,15 +189,15 @@ const q = {
     return { sql: "SELECT COUNT(*) total FROM tokens" + where, params };
   },
   token: db.prepare("SELECT * FROM tokens WHERE address=? COLLATE NOCASE"),
-  tokenEvents: db.prepare("SELECT kind,block,tx,ts,args FROM events WHERE token=? COLLATE NOCASE ORDER BY block DESC, log_index DESC LIMIT 200"),
+  tokenEvents: db.prepare("SELECT kind,block,tx,log_index,ts,args FROM events WHERE token=? COLLATE NOCASE ORDER BY block DESC, log_index DESC LIMIT 200"),
   tokenControlEvents: db.prepare("SELECT kind,args,block,log_index FROM events WHERE token=? COLLATE NOCASE AND kind IN ('RoleGranted','RoleRevoked','Paused','Unpaused','PolicyUpdated','SupplyCapUpdated','Memo') ORDER BY block ASC, log_index ASC"),
   tokenHolders: db.prepare("SELECT account,balance FROM holders WHERE token=? COLLATE NOCASE ORDER BY LENGTH(balance) DESC, balance DESC LIMIT 20"),
   deployTimes: db.prepare("SELECT ts FROM tokens WHERE ts IS NOT NULL ORDER BY ts ASC"),
   lastEvent: db.prepare("SELECT MAX(ts) ts, MAX(block) block FROM events"),
-  feed: db.prepare(`SELECT kind,block,tx,ts,args,token,symbol FROM (
-    SELECT e.kind,e.block,e.tx,e.ts,e.args,e.token,t.symbol FROM events e JOIN tokens t ON t.address=e.token
+  feed: db.prepare(`SELECT kind,block,tx,log_index,ts,args,token,symbol FROM (
+    SELECT e.kind,e.block,e.tx,e.log_index,e.ts,e.args,e.token,t.symbol FROM events e JOIN tokens t ON t.address=e.token
     UNION ALL
-    SELECT 'Created',t.block,t.tx,t.ts,'{}',t.address,t.symbol FROM tokens t
+    SELECT 'Created',t.block,t.tx,NULL,t.ts,'{}',t.address,t.symbol FROM tokens t
   ) ORDER BY block DESC LIMIT 30`),
 };
 
