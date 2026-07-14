@@ -7,6 +7,27 @@ const { ethers } = require("ethers");
 const { db, stmts } = require("./db.js");
 
 const app = express();
+app.disable("x-powered-by");
+app.use((_, res, next) => {
+  res.set("Content-Security-Policy", [
+    "default-src 'self'",
+    "script-src 'self' 'unsafe-inline'",
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+    "font-src 'self' https://fonts.gstatic.com",
+    "img-src 'self' data:",
+    "connect-src 'self'",
+    "object-src 'none'",
+    "base-uri 'self'",
+    "frame-ancestors 'none'",
+    "form-action 'none'",
+    "upgrade-insecure-requests",
+  ].join("; "));
+  res.set("X-Content-Type-Options", "nosniff");
+  res.set("X-Frame-Options", "DENY");
+  res.set("Referrer-Policy", "strict-origin-when-cross-origin");
+  res.set("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=(), clipboard-write=()");
+  next();
+});
 app.use(express.static(path.join(__dirname, "public")));
 
 app.use("/api", (req, res, next) => {
