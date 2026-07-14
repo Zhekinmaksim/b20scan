@@ -87,12 +87,17 @@ header{border-bottom:1px solid var(--ink)}
 .tab.on{background:var(--ink);border-color:var(--ink);color:#fff}
 .bar input{margin-left:auto;border:1px solid var(--line);height:34px;padding:0 12px;font:inherit;font-size:12px;width:250px;outline-color:var(--blue)}
 .sort-control{display:inline-flex;align-items:center;gap:8px;margin-left:10px}
-.sort-control span{font-size:10px;font-weight:600;letter-spacing:.1em;color:var(--slate)}
-.select-wrap{position:relative;display:inline-flex;align-items:center}
-.select-wrap:after{content:"";position:absolute;right:11px;top:50%;width:7px;height:7px;border-right:1px solid var(--slate);border-bottom:1px solid var(--slate);transform:translateY(-65%) rotate(45deg);pointer-events:none}
-.select-wrap select{appearance:none;-webkit-appearance:none;border:1px solid var(--line);background:#fff;color:var(--ink);height:34px;min-width:162px;font:inherit;font-size:12px;padding:0 32px 0 10px;outline-color:var(--blue);cursor:pointer}
-.select-wrap:hover:after{border-color:var(--ink)}
-.sort-control select:hover{border-color:var(--ink);color:var(--ink)}
+.sort-control>span{font-size:10px;font-weight:600;letter-spacing:.1em;color:var(--slate)}
+.sort-dropdown{position:relative;display:inline-flex}
+.sort-btn{height:34px;min-width:162px;border:1px solid var(--line);background:#fff;color:var(--ink);font:inherit;font-size:12px;padding:0 32px 0 10px;display:flex;align-items:center;justify-content:space-between;gap:18px;cursor:pointer}
+.sort-btn:hover,.sort-btn[aria-expanded="true"]{border-color:var(--ink)}
+.sort-btn .value{font-size:12px;font-weight:600;letter-spacing:0;color:var(--ink)}
+.sort-btn .chev{width:7px;height:7px;border-right:1px solid var(--slate);border-bottom:1px solid var(--slate);transform:translateY(-2px) rotate(45deg)}
+.sort-btn[aria-expanded="true"] .chev{transform:translateY(2px) rotate(225deg)}
+.sort-menu{position:absolute;top:calc(100% + 6px);left:0;min-width:100%;background:#fff;border:1px solid var(--line);box-shadow:0 10px 28px rgba(10,11,13,.12);z-index:20;padding:6px 0}
+.sort-option{width:100%;border:0;background:#fff;color:var(--slate);font:inherit;font-size:12px;text-align:left;padding:8px 12px;cursor:pointer;white-space:nowrap}
+.sort-option:hover{background:var(--panel);color:var(--ink)}
+.sort-option.on{color:var(--blue);font-weight:600}
 
 table{width:100%;border-collapse:collapse;table-layout:fixed}
 th:nth-child(1){width:24%}th:nth-child(2){width:27%}th:nth-child(3){width:12%}th:nth-child(4){width:10%}th:nth-child(5){width:12%}th:nth-child(6){width:15%}
@@ -192,7 +197,7 @@ footer{padding:26px 0 40px;color:var(--slate);font-size:11px;display:flex;gap:16
 footer a{color:var(--blue);text-decoration:none}
 footer a:hover{text-decoration:underline}
 @media(max-width:900px){
-  body{overflow-x:hidden}.wrap{padding:0 20px}.hd{padding:18px 20px;align-items:flex-start}.main{grid-template-columns:1fr;gap:18px}.rail{position:static}.strip{grid-template-columns:repeat(3,1fr)}.pulse{grid-column:1/-1;border-left:0;padding-left:0}.stat{padding-left:12px}.bar input{width:100%;margin-left:0}.sort-control{margin-left:0}.select-wrap select{min-width:150px}.dgrid{grid-template-columns:1fr}.dcol:nth-child(even){border-left:0}.dcol:nth-child(n+2){border-top:1px solid var(--line)}
+  body{overflow-x:hidden}.wrap{padding:0 20px}.hd{padding:18px 20px;align-items:flex-start}.main{grid-template-columns:1fr;gap:18px}.rail{position:static}.strip{grid-template-columns:repeat(3,1fr)}.pulse{grid-column:1/-1;border-left:0;padding-left:0}.stat{padding-left:12px}.bar input{width:100%;margin-left:0}.sort-control{margin-left:0}.sort-btn{min-width:150px}.dgrid{grid-template-columns:1fr}.dcol:nth-child(even){border-left:0}.dcol:nth-child(n+2){border-top:1px solid var(--line)}
   .net{max-width:190px;justify-content:flex-end;flex-wrap:wrap;gap:4px 7px;text-align:right;line-height:1.35}
   .spotlight,.detail,.activity-card,.atable{max-width:100%;overflow:hidden}
   .detail-row td{overflow:hidden}
@@ -234,17 +239,20 @@ footer a:hover{text-decoration:underline}
       <button class="tab variant-tab on" data-v="">all</button>
       <button class="tab variant-tab" data-v="asset">asset</button>
       <button class="tab variant-tab" data-v="stablecoin">stablecoin</button>
-      <label class="sort-control">
+      <div class="sort-control" id="sort-control">
         <span>SORT</span>
-        <span class="select-wrap">
-          <select id="sort" aria-label="sort tokens">
-            <option value="created">created</option>
-            <option value="activity">recent activity</option>
-            <option value="holders">holders</option>
-            <option value="transfers">transfers</option>
-          </select>
-        </span>
-      </label>
+        <div class="sort-dropdown">
+          <button id="sort-toggle" class="sort-btn" type="button" aria-haspopup="listbox" aria-expanded="false">
+            <span id="sort-label" class="value">created</span><span class="chev" aria-hidden="true"></span>
+          </button>
+          <div id="sort-menu" class="sort-menu" role="listbox" hidden>
+            <button class="sort-option on" type="button" role="option" aria-selected="true" data-sort="created">created</button>
+            <button class="sort-option" type="button" role="option" aria-selected="false" data-sort="activity">recent activity</button>
+            <button class="sort-option" type="button" role="option" aria-selected="false" data-sort="holders">holders</button>
+            <button class="sort-option" type="button" role="option" aria-selected="false" data-sort="transfers">transfers</button>
+          </div>
+        </div>
+      </div>
       <input id="search" placeholder="search symbol, name, or 0xB200 address" autocomplete="off">
     </div>
     <div class="spotlight" id="spotlight" hidden></div>
@@ -280,6 +288,7 @@ const tokenCache=new Map();
 const nameCache=new Map(), nameChecked=new Set();
 const accountTypeCache=new Map(), accountTypeChecked=new Set();
 let namesLoading=false, accountTypesLoading=false, tokenPage=1, tokenPageSize=50, tokenTotal=0, latestFeed=[];
+const SORT_LABELS={created:"created",activity:"recent activity",holders:"holders",transfers:"transfers"};
 
 const BASESCAN="https://basescan.org";
 const UINT128_MAX=(1n<<128n)-1n;
@@ -912,7 +921,38 @@ document.querySelectorAll(".variant-tab").forEach(b=>b.onclick=()=>{
   document.querySelectorAll(".variant-tab").forEach(x=>x.classList.remove("on"));
   b.classList.add("on");variant=b.dataset.v;resetTokenList();
 });
-$("#sort").onchange=e=>{sort=e.target.value;resetTokenList()};
+function setSortMenuOpen(open){
+  $("#sort-menu").hidden=!open;
+  $("#sort-toggle").setAttribute("aria-expanded",open?"true":"false");
+}
+function applySort(nextSort){
+  sort=nextSort;
+  $("#sort-label").textContent=SORT_LABELS[sort]||sort;
+  document.querySelectorAll(".sort-option").forEach(b=>{
+    const on=b.dataset.sort===sort;
+    b.classList.toggle("on",on);
+    b.setAttribute("aria-selected",on?"true":"false");
+  });
+}
+$("#sort-toggle").onclick=e=>{
+  e.stopPropagation();
+  setSortMenuOpen($("#sort-menu").hidden);
+};
+$("#sort-menu").addEventListener("click",e=>{
+  const b=e.target.closest(".sort-option");
+  if(!b)return;
+  e.stopPropagation();
+  setSortMenuOpen(false);
+  if(sort===b.dataset.sort)return;
+  applySort(b.dataset.sort);
+  resetTokenList();
+});
+document.addEventListener("click",e=>{
+  if(!$("#sort-control").contains(e.target))setSortMenuOpen(false);
+});
+document.addEventListener("keydown",e=>{
+  if(e.key==="Escape")setSortMenuOpen(false);
+});
 function resetTokenList(){
   tokenPage=1;activeDetailAddr="";activeDetailIndex=-1;activeEventPage=0;activeDetailMode="inline";clearTokenRoute();loadTokens();
 }
