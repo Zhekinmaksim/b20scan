@@ -51,9 +51,11 @@ header{border-bottom:1px solid var(--ink)}
 .ticker{border-bottom:1px solid var(--ink);background:var(--ink);color:#fff;overflow:hidden;position:relative}
 .ticker::before{content:"LIVE DEPLOYS";position:absolute;left:0;top:0;bottom:0;display:flex;align-items:center;
   background:var(--blue);color:#fff;padding:0 14px;font-size:10px;font-weight:600;letter-spacing:.12em;z-index:2}
-.tk-track{display:flex;width:max-content;animation:tick 40s linear infinite;padding-left:130px}
+.tk-track{display:flex;width:max-content;animation:tick 40s linear infinite}
 .ticker:hover .tk-track{animation-play-state:paused}
 @keyframes tick{from{transform:translateX(0)}to{transform:translateX(-50%)}}
+.tk-segment{display:flex;align-items:center}
+.tk-spacer{flex:0 0 130px}
 .tk{display:flex;align-items:center;gap:10px;padding:9px 26px 9px 0;font-size:12px;white-space:nowrap;cursor:pointer}
 .tk:hover .tk-sym{color:var(--blue-wash);text-decoration:underline}
 .tk-sym{font-weight:600}
@@ -288,6 +290,7 @@ const tokenCache=new Map();
 const nameCache=new Map(), nameChecked=new Set();
 const accountTypeCache=new Map(), accountTypeChecked=new Set();
 let namesLoading=false, accountTypesLoading=false, tokenPage=1, tokenPageSize=50, tokenTotal=0, latestFeed=[];
+let tickerKey="";
 const SORT_LABELS={created:"created",activity:"recent activity",holders:"holders",transfers:"transfers"};
 
 const BASESCAN="https://basescan.org";
@@ -387,15 +390,25 @@ async function loadHealth(){
 
 /* ticker: newest 12 tokens, duplicated for a seamless loop */
 function renderTicker(list){
-  const items=list.slice(0,12).map(t=>`
+  const tokens=list.slice(0,12);
+  const nextKey=tokens.map(t=>`${t.address}:${t.ts}`).join("|");
+  if(nextKey===tickerKey){refreshTickerAges();return}
+  tickerKey=nextKey;
+  const items=tokens.map(t=>`
     <span class="tk" onclick="openToken('${t.address}')">
       <span class="tk-sym">$${esc(t.symbol)}</span>
       <span class="tk-var ${t.variant===0?"a":"s"}">${t.variant===0?"ASSET":"STABLE"+(t.currency?"·"+esc(t.currency):"")}</span>
       <span class="tk-addr">${t.address.slice(0,6)}…${t.address.slice(-4)}</span>
-      <span class="tk-age">${fmtAge(t.ts)} ago</span>
+      <span class="tk-age" data-ts="${t.ts}">${fmtAge(t.ts)} ago</span>
       <span class="tk-sep">///</span>
     </span>`).join("");
-  $("#tk-track").innerHTML=items+items; /* x2 = seamless -50% loop */
+  const segment=`<span class="tk-spacer" aria-hidden="true"></span>${items}`;
+  $("#tk-track").innerHTML=`<span class="tk-segment">${segment}</span><span class="tk-segment" aria-hidden="true">${segment}</span>`;
+}
+function refreshTickerAges(){
+  document.querySelectorAll(".tk-age[data-ts]").forEach(el=>{
+    el.textContent=`${fmtAge(Number(el.dataset.ts))} ago`;
+  });
 }
 
 function renderBars(series){
