@@ -89,8 +89,11 @@ while its initial backfill is still running.
     GET /api/stats                          counts + cursor
     GET /api/health                         chain head, cursors, lag, last event
     GET /api/deploys                        all-time deploy histogram buckets
-    GET /api/tokens?variant=&q=&limit=      newest first
-    GET /api/tokens/count?variant=&q=       count for paginated token lists
+    GET /api/tokens?variant=&q=&limit=      paginated token lists
+      filters: min_holders=2, non_mint=1, admin=active|renounced,
+               admin_type=eoa|smart_eoa|contract
+      sort: created|activity|holders|transfers
+    GET /api/tokens/count?variant=&q=       count for the same token filters
     GET /api/tokens/:address                detail + events + top holders
     GET /api/tokens/:address/live           live name/symbol/supply/cap reads
     GET /api/names?addresses=0x...,0x...    Base names for visible addresses

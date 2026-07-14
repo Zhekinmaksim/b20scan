@@ -86,6 +86,10 @@ header{border-bottom:1px solid var(--ink)}
 .tab:hover{border-color:var(--ink);color:var(--ink)}
 .tab.on{background:var(--ink);border-color:var(--ink);color:#fff}
 .bar input{margin-left:auto;border:1px solid var(--line);padding:8px 12px;font:inherit;font-size:12px;width:250px;outline-color:var(--blue)}
+.filterbar{padding-top:0;border-bottom:1px solid var(--line)}
+.filterbar .label{font-size:10px;font-weight:600;letter-spacing:.1em;color:var(--slate);margin-right:2px}
+.filterbar select{border:1px solid var(--line);background:#fff;color:var(--slate);font:inherit;font-size:12px;padding:7px 10px;outline-color:var(--blue)}
+.filterbar select:hover{border-color:var(--ink);color:var(--ink)}
 
 table{width:100%;border-collapse:collapse;table-layout:fixed}
 th:nth-child(1){width:24%}th:nth-child(2){width:27%}th:nth-child(3){width:12%}th:nth-child(4){width:10%}th:nth-child(5){width:12%}th:nth-child(6){width:15%}
@@ -224,10 +228,33 @@ footer a:hover{text-decoration:underline}
 <div class="wrap main">
   <div>
     <div class="bar">
-      <button class="tab on" data-v="">all</button>
-      <button class="tab" data-v="asset">asset</button>
-      <button class="tab" data-v="stablecoin">stablecoin</button>
+      <button class="tab variant-tab on" data-v="">all</button>
+      <button class="tab variant-tab" data-v="asset">asset</button>
+      <button class="tab variant-tab" data-v="stablecoin">stablecoin</button>
       <input id="search" placeholder="search symbol, name, or 0xB200 address" autocomplete="off">
+    </div>
+    <div class="bar filterbar">
+      <span class="label">FILTER</span>
+      <button class="tab filter" data-filter="holders">&gt;1 holder</button>
+      <button class="tab filter" data-filter="nonMint">non-mint transfer</button>
+      <select id="admin-filter" aria-label="admin filter">
+        <option value="">any admin</option>
+        <option value="renounced">admin renounced</option>
+        <option value="active">admin active</option>
+      </select>
+      <select id="admin-type" aria-label="admin account type">
+        <option value="">any admin type</option>
+        <option value="eoa">admin EOA</option>
+        <option value="smart_eoa">admin smart EOA</option>
+        <option value="contract">admin contract</option>
+      </select>
+      <span class="label">SORT</span>
+      <select id="sort" aria-label="sort tokens">
+        <option value="created">created</option>
+        <option value="activity">recent activity</option>
+        <option value="holders">holders</option>
+        <option value="transfers">transfers</option>
+      </select>
     </div>
     <div class="spotlight" id="spotlight" hidden></div>
     <table>
@@ -257,6 +284,7 @@ footer a:hover{text-decoration:underline}
 <script>
 const $=s=>document.querySelector(s);
 let variant="", search="", known=new Set(), seenEv=new Set(), firstLoad=true, allTokens=[], currentRows=[], activeDetailAddr="", activeDetailIndex=-1, activeDetailPane="overview", activeEventPage=0, activeDetailMode="inline";
+let filterHolders=false, filterNonMint=false, adminFilter="", adminType="", sort="created";
 const tokenCache=new Map();
 const nameCache=new Map(), nameChecked=new Set();
 const accountTypeCache=new Map(), accountTypeChecked=new Set();
@@ -383,7 +411,14 @@ async function loadDeploys(){
 }
 
 async function loadTokens(){
-  const p=new URLSearchParams();if(variant)p.set("variant",variant);if(search)p.set("q",search);
+  const p=new URLSearchParams();
+  if(variant)p.set("variant",variant);
+  if(search)p.set("q",search);
+  if(filterHolders)p.set("min_holders","2");
+  if(filterNonMint)p.set("non_mint","1");
+  if(adminFilter)p.set("admin",adminFilter);
+  if(adminType)p.set("admin_type",adminType);
+  if(sort&&sort!=="created")p.set("sort",sort);
   const pageParams=new URLSearchParams(p);
   pageParams.set("limit",tokenPageSize);
   pageParams.set("offset",(tokenPage-1)*tokenPageSize);
@@ -406,12 +441,16 @@ async function loadTokens(){
   const detailTop=detailViewportTop();
   list.forEach(t=>tokenCache.set(t.address.toLowerCase(),{...(tokenCache.get(t.address.toLowerCase())||{}),...t}));
   currentRows=pinActiveRow(list);
-  if(!variant&&!search&&tokenPage===1){allTokens=list;renderTicker(list)}
+  if(!hasListFilters()&&tokenPage===1){allTokens=list;renderTicker(list)}
   $("#empty").hidden=list.length>0;
   renderRows();
   renderPager();
   restoreDetailViewportTop(detailTop);
   list.forEach(t=>known.add(t.address));firstLoad=false;
+}
+
+function hasListFilters(){
+  return Boolean(variant||search||filterHolders||filterNonMint||adminFilter||adminType||(sort&&sort!=="created"));
 }
 
 function pinActiveRow(list){
@@ -882,11 +921,23 @@ $("#feed").addEventListener("click",e=>{
   if(ev)openFromFeed(ev);
 });
 
-document.querySelectorAll(".tab").forEach(b=>b.onclick=()=>{
-  document.querySelectorAll(".tab").forEach(x=>x.classList.remove("on"));
-  b.classList.add("on");variant=b.dataset.v;tokenPage=1;activeDetailAddr="";activeDetailMode="inline";clearTokenRoute();loadTokens();
+document.querySelectorAll(".variant-tab").forEach(b=>b.onclick=()=>{
+  document.querySelectorAll(".variant-tab").forEach(x=>x.classList.remove("on"));
+  b.classList.add("on");variant=b.dataset.v;resetTokenList();
 });
-let deb;$("#search").oninput=e=>{clearTimeout(deb);deb=setTimeout(()=>{search=e.target.value.trim();tokenPage=1;activeDetailAddr="";activeDetailMode="inline";clearTokenRoute();loadTokens()},250)};
+document.querySelectorAll(".filter").forEach(b=>b.onclick=()=>{
+  if(b.dataset.filter==="holders")filterHolders=!filterHolders;
+  if(b.dataset.filter==="nonMint")filterNonMint=!filterNonMint;
+  b.classList.toggle("on",b.dataset.filter==="holders"?filterHolders:filterNonMint);
+  resetTokenList();
+});
+$("#admin-filter").onchange=e=>{adminFilter=e.target.value;resetTokenList()};
+$("#admin-type").onchange=e=>{adminType=e.target.value;resetTokenList()};
+$("#sort").onchange=e=>{sort=e.target.value;resetTokenList()};
+function resetTokenList(){
+  tokenPage=1;activeDetailAddr="";activeDetailIndex=-1;activeEventPage=0;activeDetailMode="inline";clearTokenRoute();loadTokens();
+}
+let deb;$("#search").oninput=e=>{clearTimeout(deb);deb=setTimeout(()=>{search=e.target.value.trim();resetTokenList()},250)};
 
 window.addEventListener("popstate",()=>{
   const addr=tokenRoute();

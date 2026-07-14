@@ -72,6 +72,30 @@ const ROLE_NAMES = new Map([
   [ethers.id("OPERATOR_ROLE").toLowerCase(), "OPERATOR"],
 ]);
 const PAUSE_FEATURES = ["TRANSFER", "MINT", "BURN"];
+const ADMIN_ROLE_VALUES_SQL = [ZERO_ROLE, ethers.id("DEFAULT_ADMIN_ROLE").toLowerCase()]
+  .map((role) => `'${role}'`)
+  .join(",");
+const ACCOUNT_TYPE_VALUES = new Map([
+  ["eoa", "EOA"],
+  ["smart_eoa", "SMART_EOA"],
+  ["contract", "CONTRACT"],
+]);
+const ACCOUNT_TYPE_COLUMNS = new Map([
+  ["EOA", "t.admin_eoa"],
+  ["SMART_EOA", "t.admin_smart_eoa"],
+  ["CONTRACT", "t.admin_contract"],
+]);
+const SORTS = new Map([
+  ["created", "t.block DESC"],
+  ["holders", "t.holder_count DESC, t.block DESC"],
+  ["transfers", "t.transfer_count DESC, t.block DESC"],
+  ["activity", "COALESCE(t.last_activity_block, t.block) DESC, t.block DESC"],
+]);
+const accountTypeStore = {
+  get: db.prepare("SELECT type,updated_at FROM account_types WHERE account=?"),
+  set: db.prepare(`INSERT INTO account_types(account,type,updated_at) VALUES(?,?,?)
+    ON CONFLICT(account) DO UPDATE SET type=excluded.type, updated_at=excluded.updated_at`),
+};
 
 function roleName(role) {
   return ROLE_NAMES.get(String(role).toLowerCase()) || `${String(role).slice(0, 10)}...`;
@@ -173,6 +197,11 @@ async function accountTypeFor(address) {
     const ttl = cached.value === "UNKNOWN" ? ACCOUNT_TYPE_UNKNOWN_CACHE_MS : ACCOUNT_TYPE_CACHE_MS;
     if (Date.now() - cached.at < ttl) return cached.value;
   }
+  const dbCached = accountTypeStore.get.get(key);
+  if (dbCached && Date.now() - dbCached.updated_at < ACCOUNT_TYPE_CACHE_MS) {
+    accountTypeCache.set(key, { at: Date.now(), value: dbCached.type });
+    return dbCached.type;
+  }
   let value = "EOA";
   try {
     const code = await withTimeout(provider.getCode(address), ACCOUNT_TYPE_TIMEOUT_MS);
@@ -183,15 +212,44 @@ async function accountTypeFor(address) {
     value = "UNKNOWN";
   }
   accountTypeCache.set(key, { at: Date.now(), value });
+  if (value !== "UNKNOWN") {
+    accountTypeStore.set.run(key, value, Date.now());
+    refreshAdminTypeFlagsForAccount(key);
+  }
   if (accountTypeCache.size > 4096) accountTypeCache.delete(accountTypeCache.keys().next().value);
   return value;
 }
 
-function tokenFilter(variant, search) {
+function tokenFilter(options) {
+  const { variant, search, minHolders, nonMint, admin, adminType } = options;
   const cond = [], params = [];
-  if (variant !== null) { cond.push("variant=?"); params.push(variant); }
-  if (search) { cond.push("(symbol LIKE ? OR name LIKE ? OR address LIKE ?)"); params.push(`%${search}%`, `%${search}%`, `%${search}%`); }
+  if (variant !== null) { cond.push("t.variant=?"); params.push(variant); }
+  if (search) { cond.push("(t.symbol LIKE ? OR t.name LIKE ? OR t.address LIKE ?)"); params.push(`%${search}%`, `%${search}%`, `%${search}%`); }
+  if (minHolders) { cond.push("t.holder_count>=?"); params.push(minHolders); }
+  if (nonMint) cond.push("t.has_non_mint_transfer=1");
+  if (admin === "renounced") cond.push("t.admin_active=0");
+  else if (admin === "active") cond.push("t.admin_active=1");
+  if (adminType) {
+    const col = ACCOUNT_TYPE_COLUMNS.get(adminType);
+    if (col) cond.push(`t.admin_active=1 AND ${col}=1`);
+  }
   return { where: cond.length ? " WHERE " + cond.join(" AND ") : "", params };
+}
+
+function tokenQueryOptions(req) {
+  const variant = req.query.variant === "asset" ? 0 : req.query.variant === "stablecoin" ? 1 : null;
+  const admin = req.query.admin === "renounced" ? "renounced" : req.query.admin === "active" ? "active" : null;
+  const adminType = ACCOUNT_TYPE_VALUES.get(String(req.query.admin_type || "").toLowerCase()) || null;
+  const sort = SORTS.has(String(req.query.sort || "")) ? String(req.query.sort) : "created";
+  return {
+    variant,
+    search: (req.query.q || "").slice(0, 64) || null,
+    minHolders: req.query.min_holders === "2" ? 2 : null,
+    nonMint: req.query.non_mint === "1",
+    admin,
+    adminType,
+    sort,
+  };
 }
 
 const q = {
@@ -204,15 +262,16 @@ const q = {
     (SELECT COUNT(*) FROM events WHERE kind='Memo') memos,
     (SELECT value FROM meta WHERE key='cursor') cursor,
     (SELECT value FROM meta WHERE key='token_cursor') event_cursor`),
-  tokens: (variant, search) => {
-    const { where, params } = tokenFilter(variant, search);
-    let sql = "SELECT * FROM tokens" + where;
-    sql += " ORDER BY block DESC LIMIT ? OFFSET ?";
+  tokens: (options) => {
+    const { where, params } = tokenFilter(options);
+    const order = SORTS.get(options.sort) || SORTS.get("created");
+    let sql = "SELECT t.* FROM tokens t" + where;
+    sql += ` ORDER BY ${order} LIMIT ? OFFSET ?`;
     return { sql, params };
   },
-  tokenCount: (variant, search) => {
-    const { where, params } = tokenFilter(variant, search);
-    return { sql: "SELECT COUNT(*) total FROM tokens" + where, params };
+  tokenCount: (options) => {
+    const { where, params } = tokenFilter(options);
+    return { sql: "SELECT COUNT(*) total FROM tokens t" + where, params };
   },
   token: db.prepare("SELECT * FROM tokens WHERE address=? COLLATE NOCASE"),
   tokenEvents: db.prepare("SELECT kind,block,tx,log_index,ts,args FROM events WHERE token=? COLLATE NOCASE ORDER BY block DESC, log_index DESC LIMIT 200"),
@@ -225,7 +284,92 @@ const q = {
     UNION ALL
     SELECT 'Created',t.block,t.tx,NULL,t.ts,'{}',t.address,t.symbol FROM tokens t
   ) ORDER BY block DESC LIMIT 30`),
+  adminAccountsNeedingTypes: db.prepare(`
+    SELECT DISTINCT lower(json_extract(ae.args,'$.account')) account
+    FROM events ae
+    LEFT JOIN account_types aty ON aty.account=lower(json_extract(ae.args,'$.account'))
+    WHERE ae.kind='RoleGranted'
+      AND lower(json_extract(ae.args,'$.role')) IN (${ADMIN_ROLE_VALUES_SQL})
+      AND json_extract(ae.args,'$.account') IS NOT NULL
+      AND NOT EXISTS (
+        SELECT 1 FROM events re
+        WHERE re.token=ae.token COLLATE NOCASE
+          AND re.kind='RoleRevoked'
+          AND lower(json_extract(re.args,'$.role'))=lower(json_extract(ae.args,'$.role'))
+          AND lower(json_extract(re.args,'$.account'))=lower(json_extract(ae.args,'$.account'))
+          AND (re.block > ae.block OR (re.block=ae.block AND re.log_index > ae.log_index))
+      )
+      AND (aty.account IS NULL OR aty.updated_at < ?)
+    LIMIT ?`),
 };
+
+const adminTokensForAccount = db.prepare(`
+  SELECT DISTINCT ae.token
+  FROM events ae
+  WHERE ae.kind='RoleGranted'
+    AND lower(json_extract(ae.args,'$.role')) IN (${ADMIN_ROLE_VALUES_SQL})
+    AND lower(json_extract(ae.args,'$.account'))=?
+    AND NOT EXISTS (
+      SELECT 1 FROM events re
+      WHERE re.token=ae.token COLLATE NOCASE
+        AND re.kind='RoleRevoked'
+        AND lower(json_extract(re.args,'$.role'))=lower(json_extract(ae.args,'$.role'))
+        AND lower(json_extract(re.args,'$.account'))=lower(json_extract(ae.args,'$.account'))
+        AND (re.block > ae.block OR (re.block=ae.block AND re.log_index > ae.log_index))
+    )`);
+const adminTypesForToken = db.prepare(`
+  SELECT DISTINCT aty.type
+  FROM events ae
+  JOIN account_types aty ON aty.account=lower(json_extract(ae.args,'$.account'))
+  WHERE ae.token=? COLLATE NOCASE
+    AND ae.kind='RoleGranted'
+    AND lower(json_extract(ae.args,'$.role')) IN (${ADMIN_ROLE_VALUES_SQL})
+    AND NOT EXISTS (
+      SELECT 1 FROM events re
+      WHERE re.token=ae.token COLLATE NOCASE
+        AND re.kind='RoleRevoked'
+        AND lower(json_extract(re.args,'$.role'))=lower(json_extract(ae.args,'$.role'))
+        AND lower(json_extract(re.args,'$.account'))=lower(json_extract(ae.args,'$.account'))
+        AND (re.block > ae.block OR (re.block=ae.block AND re.log_index > ae.log_index))
+    )`);
+const setTokenAdminTypeFlags = db.prepare(`
+  UPDATE tokens
+  SET admin_eoa=?, admin_smart_eoa=?, admin_contract=?
+  WHERE address=? COLLATE NOCASE`);
+
+function refreshAdminTypeFlagsForToken(tokenAddress) {
+  const types = new Set(adminTypesForToken.all(tokenAddress).map((row) => row.type));
+  setTokenAdminTypeFlags.run(
+    types.has("EOA") ? 1 : 0,
+    types.has("SMART_EOA") ? 1 : 0,
+    types.has("CONTRACT") ? 1 : 0,
+    tokenAddress
+  );
+}
+
+function refreshAdminTypeFlagsForAccount(account) {
+  for (const row of adminTokensForAccount.all(String(account).toLowerCase())) {
+    refreshAdminTypeFlagsForToken(row.token);
+  }
+}
+
+let adminTypeWarmRunning = false;
+async function warmAdminAccountTypes(limit = 75) {
+  if (adminTypeWarmRunning) return;
+  adminTypeWarmRunning = true;
+  try {
+    const staleBefore = Date.now() - ACCOUNT_TYPE_CACHE_MS;
+    const rows = q.adminAccountsNeedingTypes.all(staleBefore, limit);
+    const concurrency = 8;
+    for (let i = 0; i < rows.length; i += concurrency) {
+      await Promise.all(rows.slice(i, i + concurrency).map((row) => accountTypeFor(row.account)));
+    }
+  } catch (e) {
+    console.warn("admin account type warmup failed:", e.shortMessage || e.message);
+  } finally {
+    adminTypeWarmRunning = false;
+  }
+}
 
 function deploySeries() {
   if (seriesCache.value && Date.now() - seriesCache.at < DEPLOY_SERIES_CACHE_MS) return seriesCache.value;
@@ -331,18 +475,16 @@ app.get("/api/health", async (_, res) => {
 });
 
 app.get("/api/tokens", (req, res) => {
-  const variant = req.query.variant === "asset" ? 0 : req.query.variant === "stablecoin" ? 1 : null;
-  const search = (req.query.q || "").slice(0, 64) || null;
+  const options = tokenQueryOptions(req);
   const limit = Math.min(Number(req.query.limit || 50), 200);
   const offset = Number(req.query.offset || 0);
-  const { sql, params } = q.tokens(variant, search);
+  const { sql, params } = q.tokens(options);
   res.json(db.prepare(sql).all(...params, limit, offset));
 });
 
 app.get("/api/tokens/count", (req, res) => {
-  const variant = req.query.variant === "asset" ? 0 : req.query.variant === "stablecoin" ? 1 : null;
-  const search = (req.query.q || "").slice(0, 64) || null;
-  const { sql, params } = q.tokenCount(variant, search);
+  const options = tokenQueryOptions(req);
+  const { sql, params } = q.tokenCount(options);
   res.json(db.prepare(sql).get(...params));
 });
 
@@ -405,4 +547,8 @@ app.get("/token/:address", (_, res) => {
 });
 
 const PORT = Number(process.env.PORT || 3020);
-app.listen(PORT, () => console.log(`b20scan api+web on :${PORT}`));
+app.listen(PORT, () => {
+  console.log(`b20scan api+web on :${PORT}`);
+  setTimeout(() => warmAdminAccountTypes(500), 1_000);
+  setInterval(() => warmAdminAccountTypes(300), 60_000);
+});
