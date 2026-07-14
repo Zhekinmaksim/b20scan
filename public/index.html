@@ -88,7 +88,10 @@ header{border-bottom:1px solid var(--ink)}
 .bar input{margin-left:auto;border:1px solid var(--line);height:34px;padding:0 12px;font:inherit;font-size:12px;width:250px;outline-color:var(--blue)}
 .sort-control{display:inline-flex;align-items:center;gap:8px;margin-left:10px}
 .sort-control span{font-size:10px;font-weight:600;letter-spacing:.1em;color:var(--slate)}
-.sort-control select{border:1px solid var(--line);background:#fff;color:var(--slate);height:34px;min-width:140px;font:inherit;font-size:12px;padding:0 34px 0 10px;outline-color:var(--blue)}
+.select-wrap{position:relative;display:inline-flex;align-items:center}
+.select-wrap:after{content:"";position:absolute;right:11px;top:50%;width:7px;height:7px;border-right:1px solid var(--slate);border-bottom:1px solid var(--slate);transform:translateY(-65%) rotate(45deg);pointer-events:none}
+.select-wrap select{appearance:none;-webkit-appearance:none;border:1px solid var(--line);background:#fff;color:var(--ink);height:34px;min-width:162px;font:inherit;font-size:12px;padding:0 32px 0 10px;outline-color:var(--blue);cursor:pointer}
+.select-wrap:hover:after{border-color:var(--ink)}
 .sort-control select:hover{border-color:var(--ink);color:var(--ink)}
 
 table{width:100%;border-collapse:collapse;table-layout:fixed}
@@ -189,7 +192,7 @@ footer{padding:26px 0 40px;color:var(--slate);font-size:11px;display:flex;gap:16
 footer a{color:var(--blue);text-decoration:none}
 footer a:hover{text-decoration:underline}
 @media(max-width:900px){
-  body{overflow-x:hidden}.wrap{padding:0 20px}.hd{padding:18px 20px;align-items:flex-start}.main{grid-template-columns:1fr;gap:18px}.rail{position:static}.strip{grid-template-columns:repeat(3,1fr)}.pulse{grid-column:1/-1;border-left:0;padding-left:0}.stat{padding-left:12px}.bar input{width:100%;margin-left:0}.sort-control{margin-left:0}.sort-control select{min-width:150px}.dgrid{grid-template-columns:1fr}.dcol:nth-child(even){border-left:0}.dcol:nth-child(n+2){border-top:1px solid var(--line)}
+  body{overflow-x:hidden}.wrap{padding:0 20px}.hd{padding:18px 20px;align-items:flex-start}.main{grid-template-columns:1fr;gap:18px}.rail{position:static}.strip{grid-template-columns:repeat(3,1fr)}.pulse{grid-column:1/-1;border-left:0;padding-left:0}.stat{padding-left:12px}.bar input{width:100%;margin-left:0}.sort-control{margin-left:0}.select-wrap select{min-width:150px}.dgrid{grid-template-columns:1fr}.dcol:nth-child(even){border-left:0}.dcol:nth-child(n+2){border-top:1px solid var(--line)}
   .net{max-width:190px;justify-content:flex-end;flex-wrap:wrap;gap:4px 7px;text-align:right;line-height:1.35}
   .spotlight,.detail,.activity-card,.atable{max-width:100%;overflow:hidden}
   .detail-row td{overflow:hidden}
@@ -233,12 +236,14 @@ footer a:hover{text-decoration:underline}
       <button class="tab variant-tab" data-v="stablecoin">stablecoin</button>
       <label class="sort-control">
         <span>SORT</span>
-        <select id="sort" aria-label="sort tokens">
-          <option value="created">created</option>
-          <option value="activity">recent activity</option>
-          <option value="holders">holders</option>
-          <option value="transfers">transfers</option>
-        </select>
+        <span class="select-wrap">
+          <select id="sort" aria-label="sort tokens">
+            <option value="created">created</option>
+            <option value="activity">recent activity</option>
+            <option value="holders">holders</option>
+            <option value="transfers">transfers</option>
+          </select>
+        </span>
       </label>
       <input id="search" placeholder="search symbol, name, or 0xB200 address" autocomplete="off">
     </div>

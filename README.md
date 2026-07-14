@@ -94,7 +94,7 @@ while its initial backfill is still running.
                admin_type=eoa|smart_eoa|contract
       sort: created|activity|holders|transfers
     GET /api/tokens/count?variant=&q=       count for the same token filters
-    GET /api/tokens/:address                detail + events + top holders
+    GET /api/tokens/:address                detail + full event history + top holders
     GET /api/tokens/:address/live           live name/symbol/supply/cap reads
     GET /api/names?addresses=0x...,0x...    Base names for visible addresses
     GET /api/account-types?addresses=...    EOA/SMART_EOA/CONTRACT/UNKNOWN labels
@@ -114,6 +114,6 @@ Shareable token URLs are served by Express and hydrated by the single-page app:
 
 Token cards are split into `overview`, `controls`, and `activity`. The controls
 pane highlights active administration, minting, burn support, pause state,
-metadata mutability, supply cap, and admin account type. The activity pane is
-paginated 20 events at a time and includes event, from, to, amount, memo, hash,
-and age columns with BaseScan links.
+metadata mutability, supply cap, and admin account type. The activity pane uses
+the full indexed event history, paginated 20 events at a time, and includes
+event, from, to, amount, memo, hash, and age columns with BaseScan links.
