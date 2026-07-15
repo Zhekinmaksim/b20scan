@@ -98,6 +98,7 @@ const stmts = {
     VALUES(@address,@variant,@name,@symbol,@decimals,@currency,@creator,@block,@tx,@ts)`),
   setTokenCreator: db.prepare("UPDATE tokens SET creator=? WHERE address=? COLLATE NOCASE AND (creator IS NULL OR creator='')"),
   tokensMissingCreator: db.prepare("SELECT address,tx FROM tokens WHERE (creator IS NULL OR creator='') AND tx IS NOT NULL ORDER BY block DESC LIMIT ?"),
+  tokenCount: db.prepare("SELECT COUNT(*) n FROM tokens"),
   insertEvent: db.prepare(`INSERT OR IGNORE INTO events(token,kind,block,tx,log_index,ts,args,applied)
     VALUES(@token,@kind,@block,@tx,@log_index,@ts,@args,@applied)`),
   getEventApply: db.prepare("SELECT applied FROM events WHERE tx=? AND log_index=?"),

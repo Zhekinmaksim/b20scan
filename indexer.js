@@ -4,6 +4,7 @@
 //   node indexer.js --once        # backfill only, exit (good for cron)
 //
 // Env: RPC_URL, CHAIN_ID, START_BLOCK (activation block), CHUNK (default 2000),
+//      TOKEN_TOPIC_CHUNK (default 100),
 //      CONFIRMATIONS (default 12), POLL_MS (default 4000),
 //      LIVE_CHUNK (default 25), LIVE_LOOKBACK (default 300)
 //
@@ -22,6 +23,7 @@ const CHAIN_ID = Number(process.env.CHAIN_ID || 8453);
 // entire pre-B20 chain when .env has not been configured yet.
 const START_BLOCK = Number(process.env.START_BLOCK || 48372133);
 const CHUNK = Number(process.env.CHUNK || 2000);
+const TOKEN_TOPIC_CHUNK = Number(process.env.TOKEN_TOPIC_CHUNK || 100);
 const CONFIRMATIONS = Number(process.env.CONFIRMATIONS || 12);
 const POLL_MS = Number(process.env.POLL_MS || 4000);
 const LIVE_CHUNK = Number(process.env.LIVE_CHUNK || 25);
@@ -38,6 +40,8 @@ const provider = new ethers.JsonRpcProvider(RPC_URL, CHAIN_ID, {
 });
 const tsCache = new Map();
 const txFromCache = new Map();
+const B20_ADDRESS_PREFIX = "0xb200";
+let tokenAddressCache = { count: -1, rows: [], set: new Set() };
 
 async function blockTs(bn) {
   if (!tsCache.has(bn)) {
@@ -82,6 +86,24 @@ async function fillMissingCreators(limit = 50) {
   return n;
 }
 
+function knownTokenAddresses() {
+  const count = Number(stmts.tokenCount.get()?.n || 0);
+  if (count !== tokenAddressCache.count) {
+    const rows = stmts.tokenAddrs.all().map((r) => r.address);
+    tokenAddressCache = {
+      count,
+      rows,
+      set: new Set(rows.map((a) => a.toLowerCase())),
+    };
+  }
+  return tokenAddressCache;
+}
+
+function isKnownB20Emitter(address, addrSet) {
+  const key = String(address || "").toLowerCase();
+  return key.startsWith(B20_ADDRESS_PREFIX) && addrSet.has(key);
+}
+
 // --- factory: new tokens ---
 async function indexFactoryRange(from, to) {
   const logs = await provider.getLogs({ address: FACTORY, topics: [TOPIC_CREATED], fromBlock: from, toBlock: to });
@@ -107,7 +129,6 @@ async function indexFactoryRange(from, to) {
 }
 
 // --- tokens: transfers, memos, admin events ---
-// getLogs accepts an address array; chunk it to stay under RPC limits.
 async function insertDecodedTokenLog(log, timestamp, applyState) {
   const d = decodeTokenLog(log);
   if (!d) return 0;
@@ -118,9 +139,10 @@ async function insertDecodedTokenLog(log, timestamp, applyState) {
 }
 
 async function indexTokenRange(from, to, opts = {}) {
-  const addrs = stmts.tokenAddrs.all().map((r) => r.address);
+  const tokens = knownTokenAddresses();
+  const addrs = tokens.rows;
   if (addrs.length === 0) return 0;
-  const addrSet = opts.topicFirst ? new Set(addrs.map((a) => a.toLowerCase())) : null;
+  const applyState = opts.applyState !== false;
   // Do not issue one getBlock RPC for every event. A busy B20 range may
   // contain tens of thousands of transfers; interpolated block time has the
   // same display precision as the factory feed and keeps backfill moving.
@@ -128,20 +150,26 @@ async function indexTokenRange(from, to, opts = {}) {
   const span = Math.max(1, to - from);
   const timestampFor = (block) => Math.round(fromTs + ((block - from) / span) * (toTs - fromTs));
   let n = 0;
-  if (opts.topicFirst) {
-    const logs = await provider.getLogs({ topics: [TOKEN_TOPICS], fromBlock: from, toBlock: to });
-    for (const log of logs) {
-      if (!addrSet.has(log.address.toLowerCase())) continue;
-      n += await insertDecodedTokenLog(log, timestampFor(log.blockNumber), Boolean(opts.applyState));
+  if (opts.topicFirst !== false) {
+    try {
+      const logs = await provider.getLogs({ topics: [TOKEN_TOPICS], fromBlock: from, toBlock: to });
+      for (const log of logs) {
+        if (!isKnownB20Emitter(log.address, tokens.set)) continue;
+        n += await insertDecodedTokenLog(log, timestampFor(log.blockNumber), applyState);
+      }
+      return n;
+    } catch (e) {
+      if (opts.fallback === false) throw e;
+      console.warn(`  topic-first events failed ${from}-${to}, falling back to address scan: ${e.shortMessage || e.message}`);
     }
-    return n;
   }
 
+  // Fallback path: getLogs accepts an address array; chunk it to stay under RPC limits.
   for (let i = 0; i < addrs.length; i += 100) {
     const batch = addrs.slice(i, i + 100);
     const logs = await provider.getLogs({ address: batch, topics: [TOKEN_TOPICS], fromBlock: from, toBlock: to });
     for (const log of logs) {
-      n += await insertDecodedTokenLog(log, timestampFor(log.blockNumber), true);
+      n += await insertDecodedTokenLog(log, timestampFor(log.blockNumber), applyState);
     }
   }
   return n;
@@ -156,7 +184,7 @@ async function processFactoryRange(from, to) {
 }
 
 async function processTokenRange(from, to) {
-  await indexTokenRange(from, to);
+  await indexTokenRange(from, to, { topicFirst: true, applyState: true });
   setCursor("token_cursor", to);
 }
 
@@ -175,7 +203,7 @@ async function drainTokens(tokenCursor, factoryCursor, maxRanges = Infinity) {
   let ranges = 0;
   while (tokenCursor < factoryCursor && ranges < maxRanges) {
     const from = tokenCursor + 1;
-    const to = Math.min(from + CHUNK - 1, factoryCursor);
+    const to = Math.min(from + TOKEN_TOPIC_CHUNK - 1, factoryCursor);
     await processTokenRange(from, to);
     tokenCursor = to;
     ranges++;
