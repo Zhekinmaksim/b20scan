@@ -215,6 +215,63 @@ footer a:hover{text-decoration:underline}
   .arow .memo::before{content:"memo ";color:var(--slate)}
   .arow .hash::before{content:"hash ";color:var(--slate)}
 }
+@media(max-width:640px){
+  body{font-size:13px}
+  .wrap{padding:0 16px}
+  .hd{padding:14px 16px}
+  .sq{width:18px;height:18px}
+  .logo{font-size:18px}
+  .net{font-size:10px;max-width:170px}
+  .ticker::before{padding:0 10px;font-size:9px}
+  .tk-spacer{flex-basis:112px}
+  .tk{font-size:11px;padding-right:18px}
+  .strip{grid-template-columns:repeat(2,1fr)}
+  .stat{padding:14px 10px 12px 0;border-left:0;border-top:1px solid var(--line)}
+  .stat .n{font-size:24px}
+  .pulse{padding:14px 0 12px;border-top:1px solid var(--line)}
+  .bar{gap:8px;padding:16px 0 12px}
+  .tab{min-height:38px;padding:0 18px}
+  .sort-control{width:100%;gap:10px}
+  .sort-btn{height:38px;min-width:206px}
+  .bar input{height:38px;font-size:12px}
+
+  table{display:block;width:100%;table-layout:auto}
+  thead{display:none}
+  tbody{display:block;width:100%}
+  tr.row{
+    display:grid;
+    grid-template-columns:minmax(0,1fr) 132px 62px;
+    grid-template-rows:auto auto;
+    gap:6px 8px;
+    align-items:center;
+    padding:14px 0;
+    border-bottom:1px solid var(--line);
+  }
+  tr.row:hover td{background:transparent}
+  tr.row td{display:block;border-bottom:0;padding:0;overflow:visible;min-width:0}
+  tr.row td:nth-child(1){grid-column:1;grid-row:1 / span 2;align-self:start}
+  tr.row td:nth-child(2){grid-column:2;grid-row:1}
+  tr.row td:nth-child(3){grid-column:3;grid-row:1;justify-self:end}
+  tr.row td:nth-child(4){grid-column:2;grid-row:2;justify-self:start;text-align:left}
+  tr.row td:nth-child(5){grid-column:2;grid-row:2;justify-self:end;text-align:right}
+  tr.row td:nth-child(6){grid-column:3;grid-row:2;justify-self:end;text-align:right}
+  tr.row td:nth-child(4)::before{content:"h ";color:var(--slate);font-size:10px}
+  tr.row td:nth-child(5)::before{content:"t ";color:var(--slate);font-size:10px}
+  .sym{font-size:14px;line-height:1.25}
+  .name{display:block;font-size:12px;line-height:1.45;max-width:100%;overflow-wrap:anywhere}
+  .addr{font-size:12px;max-width:132px}
+  .addr .pfx{max-width:74px;padding:3px 6px}
+  .addr .rest{max-width:58px;padding:3px 6px}
+  .chip{font-size:10px;padding:3px 7px;white-space:nowrap}
+  .chip.s{font-size:9px;line-height:1.1;max-width:62px;white-space:normal;text-align:center;padding:4px 6px}
+  .num{font-size:14px}
+  tr.row td:nth-child(6).num{font-size:14px;line-height:1.35;max-width:62px}
+  .detail-row{display:block}
+  .detail-row td{display:block;padding:0;border-bottom:1px solid var(--ink)}
+  .pager .info{width:100%;margin:0 0 6px}
+  .pager button{min-height:34px}
+  .rail{display:none}
+}
 </style>
 </head>
 <body>
