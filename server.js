@@ -463,34 +463,43 @@ app.get("/api/stats", (_, res) => res.json(q.stats.get()));
 
 app.get("/api/deploys", (_, res) => res.json(deploySeries()));
 
+function localHealthMeta() {
+  const factoryCursor = Number(stmts.getMeta.get("factory_cursor")?.value || stmts.getMeta.get("cursor")?.value || 0);
+  const eventCursor = Number(stmts.getMeta.get("token_cursor")?.value || 0);
+  const liveCursor = Number(stmts.getMeta.get("live_token_cursor")?.value || 0);
+  const cursor = Math.max(factoryCursor, eventCursor, liveCursor);
+  const lastEvent = q.lastEvent.get();
+  return {
+    factoryCursor,
+    eventCursor,
+    liveCursor,
+    cursor,
+    lastEventTs: lastEvent?.ts || null,
+    lastEventBlock: lastEvent?.block || null,
+    database: "ok",
+    checkedAt: Math.floor(Date.now() / 1000),
+  };
+}
+
 app.get("/api/health", async (_, res) => {
   try {
     const chainHead = await withTimeout(provider.getBlockNumber(), 2_000);
-    const factoryCursor = Number(stmts.getMeta.get("factory_cursor")?.value || stmts.getMeta.get("cursor")?.value || 0);
-    const eventCursor = Number(stmts.getMeta.get("token_cursor")?.value || 0);
-    const liveCursor = Number(stmts.getMeta.get("live_token_cursor")?.value || 0);
-    const cursor = Math.max(factoryCursor, eventCursor, liveCursor);
-    const lagBlocks = Math.max(0, chainHead - cursor);
-    const lastEvent = q.lastEvent.get();
+    const local = localHealthMeta();
+    const lagBlocks = Math.max(0, chainHead - local.cursor);
     res.json({
       status: lagBlocks <= 60 ? "synced" : lagBlocks <= 600 ? "catching_up" : "lagging",
       chainHead,
-      factoryCursor,
-      eventCursor,
-      liveCursor,
-      cursor,
       lagBlocks,
-      lastEventTs: lastEvent?.ts || null,
-      lastEventBlock: lastEvent?.block || null,
-      database: "ok",
-      checkedAt: Math.floor(Date.now() / 1000),
+      ...local,
     });
   } catch (e) {
-    res.status(503).json({
-      status: "unavailable",
-      database: "ok",
+    res.json({
+      status: "checking",
+      chainHead: null,
+      lagBlocks: null,
+      ...localHealthMeta(),
+      rpc: "checking",
       error: e.shortMessage || e.message,
-      checkedAt: Math.floor(Date.now() / 1000),
     });
   }
 });

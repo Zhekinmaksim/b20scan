@@ -41,8 +41,9 @@ header{border-bottom:1px solid var(--ink)}
 .net{margin-left:auto;font-size:12px;color:var(--slate);display:flex;align-items:center;gap:8px}
 .net b{color:var(--ink);font-weight:600}
 .health{font-size:10px;font-weight:600;letter-spacing:.08em;color:var(--slate)}
-.health.synced{color:var(--blue)}
-.health.lagging,.health.unavailable{color:#B42318}
+.health.synced,.health.catching_up{color:var(--blue)}
+.health.lagging{color:#B42318}
+.health.checking,.health.unknown{color:var(--slate)}
 .dot{width:8px;height:8px;border-radius:50%;background:var(--slate);flex:none}
 .dot.live{background:var(--blue);animation:pulse 2s ease-in-out infinite}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
@@ -433,6 +434,8 @@ function fmtMultiplier(raw){
   const v=fmtUnits(raw,18,{compact:false,maxDecimals:6});
   return v==="—"?null:`${v}×`;
 }
+const healthUiStatus=s=>s==="unavailable"?"checking":String(s||"unknown");
+const healthClass=s=>s==="synced"||s==="catching_up"?s:s==="lagging"?"lagging":s==="checking"?"checking":"unknown";
 
 /* count-up animation for stats */
 function countTo(el,target){
@@ -454,8 +457,8 @@ async function loadStats(){
     $("#dot").classList.add("live");
   }catch{
     $("#dot").classList.remove("live");
-    $("#health").textContent="API unavailable";
-    $("#health").className="health unavailable";
+    $("#health").textContent="CHECKING";
+    $("#health").className="health checking";
   }
 }
 
@@ -465,13 +468,13 @@ async function loadHealth(){
     if(h.chainHead)$("#cursor").textContent=fmtN(h.chainHead);
     const last=h.lastEventTs?` · last ${fmtAge(h.lastEventTs)} ago`:"";
     const lag=h.lagBlocks!=null?` · lag ${fmtN(h.lagBlocks)}`:"";
-    $("#health").textContent=`${String(h.status||"unknown").toUpperCase()}${lag}${last}`;
-    $("#health").className="health "+(h.status==="synced"?"synced":h.status==="unavailable"?"unavailable":"lagging");
-    $("#dot").classList.toggle("live",h.status!=="unavailable");
+    const status=healthUiStatus(h.status);
+    $("#health").textContent=`${status.toUpperCase()}${lag}${last}`;
+    $("#health").className="health "+healthClass(status);
+    $("#dot").classList.add("live");
   }catch{
-    $("#health").textContent="STATUS UNAVAILABLE";
-    $("#health").className="health unavailable";
-    $("#dot").classList.remove("live");
+    $("#health").textContent="CHECKING";
+    $("#health").className="health checking";
   }
 }
 
