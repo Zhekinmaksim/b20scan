@@ -197,6 +197,19 @@ tr.row:hover td{background:var(--panel)}
 .ctl-item span{display:block;margin-top:2px;font-size:12px}
 .ctl-item .ok{color:var(--blue-dark)}
 .ctl-item .warn{color:#B42318}
+.disclosures{border:1px solid var(--line);margin:14px 18px 18px}
+.disc{padding:14px 16px;border-bottom:1px solid var(--line)}
+.disc:last-child{border-bottom:0}
+.disc-top{display:flex;align-items:center;gap:10px;margin-bottom:6px;flex-wrap:wrap}
+.disc-id{font-weight:600;font-size:13px;color:var(--ink)}
+.disc-status{font-size:10px;font-weight:600;letter-spacing:.06em;padding:2px 7px}
+.disc-status.completed{background:var(--blue-wash);color:var(--blue-dark)}
+.disc-status.open{background:var(--ink);color:#fff}
+.disc-desc{font-size:13px;color:var(--ink);line-height:1.5;margin-bottom:8px;white-space:pre-wrap;overflow-wrap:anywhere}
+.disc-meta{display:flex;gap:16px;flex-wrap:wrap;font-size:11px;color:var(--slate)}
+.disc-meta a{color:var(--blue);text-decoration:none;max-width:100%;overflow-wrap:anywhere}
+.disc-meta a:hover{text-decoration:underline}
+.disc-empty{padding:16px;color:var(--slate);font-size:12px}
 .empty{padding:40px 10px;text-align:center;color:var(--slate);font-size:13px}
 footer{padding:26px 0 40px;color:var(--slate);font-size:11px;display:flex;gap:16px;flex-wrap:wrap}
 footer a{color:var(--blue);text-decoration:none}
@@ -207,6 +220,7 @@ footer a:hover{text-decoration:underline}
   .spotlight,.detail,.activity-card,.atable{max-width:100%;overflow:hidden}
   .detail-row td{overflow:hidden}
   .dh{padding:14px 12px;gap:8px}.dh .t{font-size:20px}.dh .x{margin-left:0}.dnav{padding:10px 12px}.dcol,.activity-card{padding:12px}
+  .disclosures{margin:12px 0 0}
   .ctl-profile{grid-template-columns:1fr}.ctl-item:nth-child(even){border-left:0}
   .arow{grid-template-columns:minmax(0,1fr) auto auto;gap:5px 10px;padding:10px 0;min-height:0}
   .arow.head{display:none}
@@ -308,7 +322,7 @@ footer a:hover{text-decoration:underline}
 <header><div class="wrap hd">
   <div class="sq"></div>
   <div class="logo">B20<em>SCAN</em></div>
-  <div class="net"><span class="dot" id="dot"></span><span>base mainnet · block <b id="cursor">—</b></span><span class="health" id="health">checking</span></div>
+  <div class="net"><span class="dot" id="dot"></span><span>base mainnet · block <b id="cursor">—</b></span><span class="health unknown" id="health">indexed</span></div>
 </div></header>
 
 <div class="ticker" id="ticker"><div class="tk-track" id="tk-track"></div></div>
@@ -394,12 +408,13 @@ const fmtAddr=a=>{
 };
 const addrLink=a=>a?`<a class="bslink" href="${BASESCAN}/address/${a}" target="_blank" rel="noopener noreferrer" title="${esc(a)}" data-address="${a.toLowerCase()}">${esc(nameFor(a)||shortAddr(a))}</a>`:"—";
 const accountTypeFor=a=>a?accountTypeCache.get(a.toLowerCase()):null;
-const accountTypeLabel=t=>String(t||"").replace(/_/g," ");
+const accountTypeLabel=t=>t==="UNKNOWN"?"type unknown":String(t||"").replace(/_/g," ");
 const accountTypeClass=t=>esc(String(t||"unknown").toLowerCase().replace(/[^a-z0-9]+/g,"_"));
 function roleAccountLink(a){
   if(!a)return "—";
   const type=accountTypeFor(a);
-  const typeHtml=type?`<span class="acct-type ${accountTypeClass(type)}">${esc(accountTypeLabel(type))}</span>`:'<span class="acct-type unknown">checking</span>';
+  const typeText=type&&type!=="UNKNOWN"?accountTypeLabel(type):"type unknown";
+  const typeHtml=`<span class="acct-type ${accountTypeClass(type)}">${esc(typeText)}</span>`;
   return `<span class="acct" data-account-type="${a.toLowerCase()}">${addrLink(a)}${typeHtml}</span>`;
 }
 const txLink=tx=>tx?`<a class="bslink" href="${BASESCAN}/tx/${tx}" target="_blank" rel="noopener noreferrer">${tx.slice(0,10)}…${tx.slice(-6)}</a>`:"—";
@@ -408,6 +423,18 @@ const fmtAge=ts=>{const s=Math.max(1,(Date.now()/1e3|0)-ts);if(s<60)return s+"s"
 const fmtDate=ts=>ts?new Date(ts*1000).toLocaleString("en-US",{month:"short",day:"numeric",year:"numeric",hour:"2-digit",minute:"2-digit"}):"—";
 const fmtN=n=>Number(n).toLocaleString("en-US");
 const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const escAttr=s=>esc(s).replace(/'/g,"&#39;");
+async function fetchJson(url,timeoutMs=6000){
+  const ctrl=new AbortController();
+  const timer=setTimeout(()=>ctrl.abort(),timeoutMs);
+  try{
+    const res=await fetch(url,{signal:ctrl.signal});
+    if(!res.ok)throw new Error(`HTTP ${res.status}`);
+    return await res.json();
+  }finally{
+    clearTimeout(timer);
+  }
+}
 function fmtUnits(raw,decimals=0,opts={}){
   if(raw===undefined||raw===null||raw==="")return "—";
   try{
@@ -434,8 +461,41 @@ function fmtMultiplier(raw){
   const v=fmtUnits(raw,18,{compact:false,maxDecimals:6});
   return v==="—"?null:`${v}×`;
 }
-const healthUiStatus=s=>s==="unavailable"?"checking":String(s||"unknown");
-const healthClass=s=>s==="synced"||s==="catching_up"?s:s==="lagging"?"lagging":s==="checking"?"checking":"unknown";
+function disclosureUriHtml(uri){
+  if(!uri)return "";
+  const raw=String(uri);
+  if(/^ipfs:\/\//i.test(raw)){
+    const path=raw.replace(/^ipfs:\/\//i,"").split("/").map(encodeURIComponent).join("/");
+    return `<a href="https://ipfs.io/ipfs/${path}" target="_blank" rel="noopener noreferrer">${esc(raw)}</a>`;
+  }
+  if(/^https?:\/\//i.test(raw)){
+    return `<a href="${escAttr(raw)}" target="_blank" rel="noopener noreferrer">${esc(raw)}</a>`;
+  }
+  return esc(raw);
+}
+function renderDisclosures(announcements){
+  const rows=announcements||[];
+  if(!rows.length){
+    return `<div class="disclosures"><div class="disc-empty">No issuer disclosures. Announcements wrap sensitive issuer operations with a public onchain notice.</div></div>`;
+  }
+  return `<div class="disclosures">${rows.map(a=>`
+    <div class="disc">
+      <div class="disc-top">
+        <span class="disc-id">${esc(a.id)}</span>
+        <span class="disc-status ${a.closed?"completed":"open"}">${a.closed?"COMPLETED":"OPEN"}</span>
+      </div>
+      <div class="disc-desc">${a.description?esc(a.description):'<span class="name">no description</span>'}</div>
+      <div class="disc-meta">
+        <span>caller ${a.caller?addrLink(a.caller):"—"}</span>
+        <span>opened ${fmtAge(a.ts)} ago</span>
+        <span>tx ${txLink(a.tx)}</span>
+        ${a.close_tx?`<span>close ${txLink(a.close_tx)}</span>`:""}
+        ${a.uri?`<span>doc ${disclosureUriHtml(a.uri)}</span>`:""}
+      </div>
+    </div>`).join("")}</div>`;
+}
+const healthUiStatus=s=>s==="checking"||s==="unavailable"?"indexed":String(s||"unknown");
+const healthClass=s=>s==="synced"||s==="catching_up"?s:s==="lagging"?"lagging":s==="indexed"?"unknown":"unknown";
 
 /* count-up animation for stats */
 function countTo(el,target){
@@ -449,7 +509,7 @@ function countTo(el,target){
 
 async function loadStats(){
   try{
-    const s=await (await fetch("/api/stats")).json();
+    const s=await fetchJson("/api/stats");
     countTo($("#s-tokens"),s.tokens);countTo($("#s-assets"),s.assets);
     countTo($("#s-stables"),s.stables);countTo($("#s-transfers"),s.transfers);
     countTo($("#s-holders"),s.holders);
@@ -457,15 +517,16 @@ async function loadStats(){
     $("#dot").classList.add("live");
   }catch{
     $("#dot").classList.remove("live");
-    $("#health").textContent="CHECKING";
-    $("#health").className="health checking";
+    $("#health").textContent="INDEXED";
+    $("#health").className="health unknown";
   }
 }
 
 async function loadHealth(){
   try{
-    const h=await (await fetch("/api/health")).json();
+    const h=await fetchJson("/api/health",3000);
     if(h.chainHead)$("#cursor").textContent=fmtN(h.chainHead);
+    else if(h.cursor)$("#cursor").textContent=fmtN(h.cursor);
     const last=h.lastEventTs?` · last ${fmtAge(h.lastEventTs)} ago`:"";
     const lag=h.lagBlocks!=null?` · lag ${fmtN(h.lagBlocks)}`:"";
     const status=healthUiStatus(h.status);
@@ -473,8 +534,8 @@ async function loadHealth(){
     $("#health").className="health "+healthClass(status);
     $("#dot").classList.add("live");
   }catch{
-    $("#health").textContent="CHECKING";
-    $("#health").className="health checking";
+    $("#health").textContent="INDEXED";
+    $("#health").className="health unknown";
   }
 }
 
@@ -687,16 +748,19 @@ async function loadVisibleAccountTypes(){
   addresses.forEach(a=>accountTypeChecked.add(a));
   accountTypesLoading=true;
   try{
-    const types=await (await fetch("/api/account-types?addresses="+encodeURIComponent(addresses.join(",")))).json();
+    const types=await fetchJson("/api/account-types?addresses="+encodeURIComponent(addresses.join(",")),3000);
     let changed=false;
     Object.entries(types).forEach(([addr,type])=>{
       const key=addr.toLowerCase();
-      if(type==="UNKNOWN"){accountTypeCache.delete(key);accountTypeChecked.delete(key);return}
       if(type&&accountTypeCache.get(key)!==type){accountTypeCache.set(key,type);changed=true}
     });
     if(changed)renderRows();
   }catch{
-    addresses.forEach(a=>accountTypeChecked.delete(a));
+    let changed=false;
+    addresses.forEach(a=>{
+      if(accountTypeCache.get(a)!=="UNKNOWN"){accountTypeCache.set(a,"UNKNOWN");changed=true}
+    });
+    if(changed)renderRows();
   }finally{
     accountTypesLoading=false;
   }
@@ -723,11 +787,14 @@ function feedLine(e){
   if(e.kind==="Created")return "new B20 token deployed";
   if(e.kind==="RoleGranted")return `${a.role.slice(0,10)} → ${a.account.slice(0,8)}`;
   if(e.kind==="SupplyCapUpdated")return "supply cap updated";
+  if(e.kind==="Announcement")return `disclosure ${String(a.id||"").slice(0,28)}`;
+  if(e.kind==="EndAnnouncement")return `disclosure closed ${String(a.id||"").slice(0,21)}`;
+  if(e.kind==="ExtraMetadataUpdated")return `metadata ${String(a.key||"").slice(0,28)}`;
   return e.kind;
 }
 
 function paneForEvent(kind){
-  if(kind==="RoleGranted"||kind==="RoleRevoked"||kind==="SupplyCapUpdated"||kind==="Paused"||kind==="Unpaused"||kind==="PolicyUpdated")return "controls";
+  if(kind==="RoleGranted"||kind==="RoleRevoked"||kind==="SupplyCapUpdated"||kind==="Paused"||kind==="Unpaused"||kind==="PolicyUpdated"||kind==="ExtraMetadataUpdated")return "controls";
   if(kind==="Transfer"||kind==="Memo"||kind==="BurnedBlocked")return "activity";
   return "overview";
 }
@@ -738,6 +805,7 @@ function seedFromFeed(e){
     decimals:18,block:e.block,tx:e.tx,ts:e.ts,total_supply:"0",holder_count:0,transfer_count:0,
     live:null,events:[{kind:e.kind,block:e.block,tx:e.tx,log_index:e.log_index,ts:e.ts,args:e.args}],holders:[],
     controls:{roles:{},paused:[],policy:{},memo:e.kind==="Memo"?e.args.memo:null,supply_cap:null},
+    announcements:e.kind==="Announcement"?[{...e.args,block:e.block,tx:e.tx,ts:e.ts,closed:false}]:[],
   };
 }
 
@@ -826,7 +894,7 @@ function detailHtml(t,loading){
   const adminAccounts=roles.ADMIN||[];
   const adminTypes=adminAccounts.map(accountTypeFor).filter(Boolean);
   const adminTypeLabel=adminAccounts.length
-    ? (adminTypes.length===adminAccounts.length?[...new Set(adminTypes.map(accountTypeLabel))].join(" / "):"checking")
+    ? (adminTypes.length===adminAccounts.length?[...new Set(adminTypes.map(accountTypeLabel))].join(" / "):"unknown")
     : "—";
   const adminActive=hasRole("ADMIN");
   const mintable=hasRole("MINT");
@@ -881,6 +949,10 @@ function detailHtml(t,loading){
           <div class="kv"><b>holders</b><span>${fmtN(t.holder_count)}</span></div>
           <div class="kv"><b>chain read</b><span>${live.fetched_at?"live · "+fmtAge(live.fetched_at)+" ago":loading?"loading":"indexed"}</span></div>
         </div>
+      </div>
+      <div class="activity-card">
+        <h3>issuer disclosures</h3>
+        ${renderDisclosures(t.announcements)}
       </div>`)}
     ${pane("controls",`
       <div class="dgrid">
@@ -996,6 +1068,9 @@ function eventParts(e,t){
   if(e.kind==="SupplyCapUpdated")return {from:"—",to:"—",amount:amountFor(a.newSupplyCap,t.live?.decimals??t.decimals??0),memo:"supply cap updated"};
   if(e.kind==="RoleGranted"||e.kind==="RoleRevoked")return {from:a.role?.slice(0,10),to:a.account,amount:"—",memo:e.kind==="RoleGranted"?"role granted":"role revoked"};
   if(e.kind==="Paused"||e.kind==="Unpaused")return {from:"—",to:"—",amount:"—",memo:JSON.stringify(a).slice(0,80)};
+  if(e.kind==="Announcement")return {from:a.caller,to:a.id,amount:"—",memo:a.description||a.uri||"issuer disclosure"};
+  if(e.kind==="EndAnnouncement")return {from:"—",to:a.id,amount:"—",memo:"issuer disclosure closed"};
+  if(e.kind==="ExtraMetadataUpdated")return {from:a.key,to:"metadata",amount:"—",memo:a.value||"metadata updated"};
   return {from:a.from||"—",to:a.to||"—",amount:amountFor(a.amount,t.live?.decimals??t.decimals??0),memo:JSON.stringify(a).slice(0,80)};
 }
 

@@ -18,12 +18,16 @@ const tokenIface = new ethers.Interface([
   "event RoleGranted(bytes32 indexed role, address indexed account, address indexed sender)",
   "event RoleRevoked(bytes32 indexed role, address indexed account, address indexed sender)",
   "event BurnedBlocked(address indexed caller, address indexed from, uint256 amount)",
+  "event Announcement(address indexed caller, string id, string description, string uri)",
+  "event EndAnnouncement(string id)",
+  "event ExtraMetadataUpdated(string key, string value)",
   "function totalSupply() view returns (uint256)",
   "function supplyCap() view returns (uint256)",
 ]);
 const TOKEN_TOPICS = [
   "Transfer", "Memo", "SupplyCapUpdated", "Paused", "Unpaused",
   "PolicyUpdated", "RoleGranted", "RoleRevoked", "BurnedBlocked",
+  "Announcement", "EndAnnouncement", "ExtraMetadataUpdated",
 ].map((n) => tokenIface.getEvent(n).topicHash);
 
 // Decodes B20Created; for the STABLECOIN variant also decodes the currency code

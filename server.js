@@ -296,6 +296,7 @@ const q = {
   },
   token: db.prepare("SELECT * FROM tokens WHERE address=? COLLATE NOCASE"),
   tokenEvents: db.prepare("SELECT kind,block,tx,log_index,ts,args FROM events WHERE token=? COLLATE NOCASE ORDER BY block DESC, log_index DESC"),
+  tokenAnnouncements: db.prepare("SELECT kind,block,tx,log_index,ts,args FROM events WHERE token=? COLLATE NOCASE AND kind IN ('Announcement','EndAnnouncement') ORDER BY block ASC, log_index ASC"),
   tokenControlEvents: db.prepare("SELECT kind,args,block,log_index FROM events WHERE token=? COLLATE NOCASE AND kind IN ('RoleGranted','RoleRevoked','Paused','Unpaused','PolicyUpdated','SupplyCapUpdated','Memo') ORDER BY block ASC, log_index ASC"),
   tokenHolders: db.prepare("SELECT account,balance FROM holders WHERE token=? COLLATE NOCASE ORDER BY LENGTH(balance) DESC, balance DESC LIMIT 20"),
   deployTimes: db.prepare("SELECT ts FROM tokens WHERE ts IS NOT NULL ORDER BY ts ASC"),
@@ -459,6 +460,35 @@ function controlsFor(address, tokenRow) {
   };
 }
 
+function reconstructAnnouncements(address) {
+  const byId = new Map();
+  for (const row of q.tokenAnnouncements.all(address)) {
+    const args = JSON.parse(row.args);
+    const id = String(args.id || "");
+    if (!id) continue;
+    if (row.kind === "Announcement") {
+      byId.set(id, {
+        id,
+        caller: args.caller || null,
+        description: args.description || "",
+        uri: args.uri || null,
+        block: row.block,
+        tx: row.tx,
+        ts: row.ts,
+        closed: false,
+        close_block: null,
+        close_tx: null,
+      });
+    } else if (row.kind === "EndAnnouncement" && byId.has(id)) {
+      const item = byId.get(id);
+      item.closed = true;
+      item.close_block = row.block;
+      item.close_tx = row.tx;
+    }
+  }
+  return [...byId.values()].sort((a, b) => b.block - a.block);
+}
+
 app.get("/api/stats", (_, res) => res.json(q.stats.get()));
 
 app.get("/api/deploys", (_, res) => res.json(deploySeries()));
@@ -493,12 +523,13 @@ app.get("/api/health", async (_, res) => {
       ...local,
     });
   } catch (e) {
+    const local = localHealthMeta();
     res.json({
-      status: "checking",
+      status: local.cursor ? "indexed" : "unknown",
       chainHead: null,
       lagBlocks: null,
-      ...localHealthMeta(),
-      rpc: "checking",
+      ...local,
+      rpc: "unavailable",
       error: e.shortMessage || e.message,
     });
   }
@@ -565,6 +596,7 @@ app.get("/api/tokens/:address", (req, res) => {
     events: q.tokenEvents.all(t.address).map((e) => ({ ...e, args: JSON.parse(e.args) })),
     holders: q.tokenHolders.all(t.address),
     controls: controlsFor(t.address, t),
+    announcements: reconstructAnnouncements(t.address),
   });
 });
 
