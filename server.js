@@ -5,6 +5,7 @@ const express = require("express");
 const path = require("path");
 const { ethers } = require("ethers");
 const { db, stmts } = require("./db.js");
+const { mountHistory } = require("./history.js");
 
 const app = express();
 app.disable("x-powered-by");
@@ -38,6 +39,7 @@ app.use("/api", (req, res, next) => {
   if (req.method === "OPTIONS") return res.sendStatus(204);
   next();
 });
+mountHistory(app, db);
 
 const provider = new ethers.JsonRpcProvider(process.env.RPC_URL || "https://mainnet.base.org", 8453, {
   staticNetwork: ethers.Network.from(8453),
