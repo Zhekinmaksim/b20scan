@@ -65,7 +65,7 @@ function formatWholeUnits(raw, decimals) {
 function mountHistory(app, db) {
   app.use("/api/token", (_, res, next) => {
     res.set("Access-Control-Allow-Origin", "*");
-    res.set("Cache-Control", "public, max-age=10");
+    res.set("Cache-Control", "public, max-age=10, stale-while-revalidate=20");
     next();
   });
 

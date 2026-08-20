@@ -9,6 +9,44 @@ const { mountHistory } = require("./history.js");
 
 const app = express();
 app.disable("x-powered-by");
+app.set("trust proxy", true);
+
+const API_RATE_WINDOW_MS = Number(process.env.API_RATE_WINDOW_MS || 60_000);
+const API_RATE_LIMIT = Number(process.env.API_RATE_LIMIT || 300);
+const apiRateBuckets = new Map();
+
+function clientIp(req) {
+  return String(req.ip || req.socket?.remoteAddress || "unknown");
+}
+
+function apiRateLimit(req, res, next) {
+  const now = Date.now();
+  const key = clientIp(req);
+  let bucket = apiRateBuckets.get(key);
+  if (!bucket || now >= bucket.resetAt) {
+    bucket = { count: 0, resetAt: now + API_RATE_WINDOW_MS };
+    apiRateBuckets.set(key, bucket);
+  }
+  bucket.count++;
+  const remaining = Math.max(0, API_RATE_LIMIT - bucket.count);
+  const retryAfter = Math.max(1, Math.ceil((bucket.resetAt - now) / 1000));
+  res.set("X-RateLimit-Limit", String(API_RATE_LIMIT));
+  res.set("X-RateLimit-Remaining", String(remaining));
+  res.set("X-RateLimit-Reset", String(Math.ceil(bucket.resetAt / 1000)));
+  if (bucket.count > API_RATE_LIMIT) {
+    res.set("Retry-After", String(retryAfter));
+    return res.status(429).json({ error: "rate limit exceeded", retry_after: retryAfter });
+  }
+  next();
+}
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, bucket] of apiRateBuckets) {
+    if (now >= bucket.resetAt) apiRateBuckets.delete(key);
+  }
+}, API_RATE_WINDOW_MS).unref();
+
 app.use((_, res, next) => {
   res.set("Content-Security-Policy", [
     "default-src 'self'",
@@ -31,11 +69,11 @@ app.use((_, res, next) => {
 });
 app.use(express.static(path.join(__dirname, "public")));
 
-app.use("/api", (req, res, next) => {
+app.use("/api", apiRateLimit, (req, res, next) => {
   res.set("Access-Control-Allow-Origin", "*");
   res.set("Access-Control-Allow-Methods", "GET, OPTIONS");
   res.set("Access-Control-Allow-Headers", "Content-Type");
-  res.set("Cache-Control", "public, max-age=5");
+  res.set("Cache-Control", "public, max-age=5, stale-while-revalidate=10");
   if (req.method === "OPTIONS") return res.sendStatus(204);
   next();
 });
