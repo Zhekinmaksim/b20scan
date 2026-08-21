@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS events (
 );
 CREATE INDEX IF NOT EXISTS idx_events_token ON events(token, block DESC);
 CREATE INDEX IF NOT EXISTS idx_events_kind ON events(kind, block DESC);
+CREATE INDEX IF NOT EXISTS idx_events_block_log ON events(block DESC, log_index DESC);
 
 CREATE TABLE IF NOT EXISTS holders (
   token TEXT NOT NULL,
@@ -48,6 +49,7 @@ CREATE TABLE IF NOT EXISTS holders (
   balance TEXT NOT NULL DEFAULT '0',
   PRIMARY KEY (token, account)
 );
+CREATE INDEX IF NOT EXISTS idx_holders_account ON holders(account);
 CREATE TABLE IF NOT EXISTS account_types (
   account TEXT PRIMARY KEY,
   type TEXT NOT NULL,
