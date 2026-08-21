@@ -105,6 +105,9 @@ const NAME_API_TIMEOUT_MS = 1_200;
 const ACCOUNT_TYPE_CACHE_MS = 3_600_000;
 const ACCOUNT_TYPE_UNKNOWN_CACHE_MS = 10_000;
 const ACCOUNT_TYPE_TIMEOUT_MS = 2_500;
+const ADMIN_TYPE_STARTUP_WARM_LIMIT = Number(process.env.ADMIN_TYPE_STARTUP_WARM_LIMIT || 0);
+const ADMIN_TYPE_INTERVAL_WARM_LIMIT = Number(process.env.ADMIN_TYPE_INTERVAL_WARM_LIMIT || 50);
+const ADMIN_TYPE_WARM_INTERVAL_MS = Number(process.env.ADMIN_TYPE_WARM_INTERVAL_MS || 300_000);
 const ENS_REGISTRY_ADDRESS = "0x00000000000C2E074eC69A0dFb2997BA6C7d2e1e";
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 const ensRegistry = new ethers.Contract(
@@ -651,6 +654,10 @@ app.get("/token/:address", (_, res) => {
 const PORT = Number(process.env.PORT || 3020);
 app.listen(PORT, () => {
   console.log(`b20scan api+web on :${PORT}`);
-  setTimeout(() => warmAdminAccountTypes(500), 1_000);
-  setInterval(() => warmAdminAccountTypes(300), 60_000);
+  if (ADMIN_TYPE_STARTUP_WARM_LIMIT > 0) {
+    setTimeout(() => warmAdminAccountTypes(ADMIN_TYPE_STARTUP_WARM_LIMIT), 15_000);
+  }
+  if (ADMIN_TYPE_INTERVAL_WARM_LIMIT > 0) {
+    setInterval(() => warmAdminAccountTypes(ADMIN_TYPE_INTERVAL_WARM_LIMIT), ADMIN_TYPE_WARM_INTERVAL_MS).unref();
+  }
 });
