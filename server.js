@@ -344,11 +344,22 @@ const q = {
   tokenHolders: db.prepare("SELECT account,balance FROM holders WHERE token=? COLLATE NOCASE ORDER BY LENGTH(balance) DESC, balance DESC LIMIT 20"),
   deployTimes: db.prepare("SELECT ts FROM tokens WHERE ts IS NOT NULL ORDER BY ts ASC"),
   lastEvent: db.prepare("SELECT ts, block FROM events ORDER BY block DESC, log_index DESC LIMIT 1"),
-  feed: db.prepare(`SELECT kind,block,tx,log_index,ts,args,token,symbol FROM (
-    SELECT e.kind,e.block,e.tx,e.log_index,e.ts,e.args,e.token,t.symbol FROM events e JOIN tokens t ON t.address=e.token
-    UNION ALL
-    SELECT 'Created',t.block,t.tx,NULL,t.ts,'{}',t.address,t.symbol FROM tokens t
-  ) ORDER BY block DESC LIMIT 30`),
+  feedEvents: db.prepare(`
+    SELECT e.kind,e.block,e.tx,e.log_index,e.ts,e.args,e.token,t.symbol
+    FROM (
+      SELECT kind,block,tx,log_index,ts,args,token
+      FROM events
+      ORDER BY block DESC, log_index DESC
+      LIMIT 60
+    ) e
+    JOIN tokens t ON t.address=e.token
+  `),
+  feedCreates: db.prepare(`
+    SELECT 'Created' kind,block,tx,NULL log_index,ts,'{}' args,address token,symbol
+    FROM tokens
+    ORDER BY block DESC
+    LIMIT 60
+  `),
   adminAccountsNeedingTypes: db.prepare(`
     SELECT DISTINCT lower(json_extract(ae.args,'$.account')) account
     FROM events ae
@@ -643,9 +654,12 @@ app.get("/api/tokens/:address", (req, res) => {
   });
 });
 
-app.get("/api/feed", (_, res) =>
-  res.json(q.feed.all().map((e) => ({ ...e, args: JSON.parse(e.args) })))
-);
+app.get("/api/feed", (_, res) => {
+  const rows = [...q.feedEvents.all(), ...q.feedCreates.all()]
+    .sort((a, b) => (b.block - a.block) || ((b.log_index ?? -1) - (a.log_index ?? -1)))
+    .slice(0, 30);
+  res.json(rows.map((e) => ({ ...e, args: JSON.parse(e.args) })));
+});
 
 app.get("/token/:address", (_, res) => {
   res.sendFile(path.join(__dirname, "public", "index.html"));
