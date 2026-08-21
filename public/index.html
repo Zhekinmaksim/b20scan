@@ -40,6 +40,8 @@ header{border-bottom:1px solid var(--ink)}
 .logo em{font-style:normal;color:var(--blue)}
 .net{margin-left:auto;font-size:12px;color:var(--slate);display:flex;align-items:center;gap:8px}
 .net b{color:var(--ink);font-weight:600}
+.head-link{border:1px solid var(--line);color:var(--blue);font-size:10px;font-weight:600;letter-spacing:.08em;padding:3px 7px;text-transform:uppercase}
+.head-link:hover{border-color:var(--blue);background:var(--blue-wash);text-decoration:none}
 .health{font-size:10px;font-weight:600;letter-spacing:.08em;color:var(--slate)}
 .health.synced,.health.catching_up{color:var(--blue)}
 .health.lagging{color:#B42318}
@@ -322,7 +324,7 @@ footer a:hover{text-decoration:underline}
 <header><div class="wrap hd">
   <div class="sq"></div>
   <div class="logo">B20<em>SCAN</em></div>
-  <div class="net"><span class="dot" id="dot"></span><span>base mainnet · block <b id="cursor">—</b></span><span class="health unknown" id="health">indexed</span></div>
+  <div class="net"><span class="dot" id="dot"></span><span>base mainnet · block <b id="cursor">—</b></span><span class="health unknown" id="health">indexed</span><a class="head-link" href="https://github.com/Zhekinmaksim/b20scan/blob/main/MCP.md" target="_blank" rel="noopener noreferrer">MCP</a></div>
 </div></header>
 
 <div class="ticker" id="ticker"><div class="tk-track" id="tk-track"></div></div>
