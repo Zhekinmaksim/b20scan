@@ -5,6 +5,9 @@ const path = require("path");
 
 const db = new Database(process.env.DB_PATH || path.join(__dirname, "b20scan.db"));
 db.pragma("journal_mode = WAL");
+// Keep public reads resilient while the indexer commits a batch. WAL allows
+// readers during normal writes; a short busy timeout covers the commit window.
+db.pragma("busy_timeout = 5000");
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS meta (

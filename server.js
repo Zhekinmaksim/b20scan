@@ -590,17 +590,27 @@ app.get("/api/health", async (_, res) => {
 });
 
 app.get("/api/tokens", (req, res) => {
-  const options = tokenQueryOptions(req);
-  const limit = Math.min(Number(req.query.limit || 50), 200);
-  const offset = Number(req.query.offset || 0);
-  const { sql, params } = q.tokens(options);
-  res.json(db.prepare(sql).all(...params, limit, offset));
+  try {
+    const options = tokenQueryOptions(req);
+    const limit = Math.min(Number(req.query.limit || 50), 200);
+    const offset = Number(req.query.offset || 0);
+    const { sql, params } = q.tokens(options);
+    res.json(db.prepare(sql).all(...params, limit, offset));
+  } catch (e) {
+    console.warn(`token list read failed: ${e.code || e.message}`);
+    res.status(503).json({ error: "indexer temporarily unavailable" });
+  }
 });
 
 app.get("/api/tokens/count", (req, res) => {
-  const options = tokenQueryOptions(req);
-  const { sql, params } = q.tokenCount(options);
-  res.json(db.prepare(sql).get(...params));
+  try {
+    const options = tokenQueryOptions(req);
+    const { sql, params } = q.tokenCount(options);
+    res.json(db.prepare(sql).get(...params));
+  } catch (e) {
+    console.warn(`token count read failed: ${e.code || e.message}`);
+    res.status(503).json({ error: "indexer temporarily unavailable" });
+  }
 });
 
 app.get("/api/names", async (req, res) => {
