@@ -174,6 +174,20 @@ async function getAddressScopedLogs(addresses, topics, from, to) {
   }
 }
 
+async function getTopicScopedLogs(topics, from, to) {
+  try {
+    return await provider.getLogs({ topics, fromBlock: from, toBlock: to });
+  } catch (e) {
+    if (!isResponseTooLarge(e) || from >= to) throw e;
+    const mid = Math.floor((from + to) / 2);
+    const [left, right] = await Promise.all([
+      getTopicScopedLogs(topics, from, mid),
+      getTopicScopedLogs(topics, mid + 1, to),
+    ]);
+    return left.concat(right);
+  }
+}
+
 async function indexTokenRange(from, to, opts = {}) {
   const tokens = knownTokenAddresses();
   const addrs = tokens.rows;
@@ -188,7 +202,7 @@ async function indexTokenRange(from, to, opts = {}) {
   let n = 0;
   if (opts.topicFirst !== false) {
     try {
-      const logs = await provider.getLogs({ topics: [TOKEN_TOPICS], fromBlock: from, toBlock: to });
+      const logs = await getTopicScopedLogs([TOKEN_TOPICS], from, to);
       for (const log of logs) {
         if (!isKnownB20Emitter(log.address, tokens.set)) continue;
         n += await insertDecodedTokenLog(log, timestampFor(log.blockNumber), applyState);
