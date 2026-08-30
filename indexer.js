@@ -24,6 +24,7 @@ const CHAIN_ID = Number(process.env.CHAIN_ID || 8453);
 const START_BLOCK = Number(process.env.START_BLOCK || 48372133);
 const CHUNK = Number(process.env.CHUNK || 2000);
 const TOKEN_TOPIC_CHUNK = Number(process.env.TOKEN_TOPIC_CHUNK || 100);
+const TOKEN_ADDRESS_CHUNK = Number(process.env.TOKEN_ADDRESS_CHUNK || 25);
 const CONFIRMATIONS = Number(process.env.CONFIRMATIONS || 12);
 const POLL_MS = Number(process.env.POLL_MS || 4000);
 const LIVE_CHUNK = Number(process.env.LIVE_CHUNK || 25);
@@ -104,6 +105,16 @@ function isKnownB20Emitter(address, addrSet) {
   return key.startsWith(B20_ADDRESS_PREFIX) && addrSet.has(key);
 }
 
+function isResponseTooLarge(e) {
+  const text = [
+    e?.shortMessage,
+    e?.message,
+    e?.info?.responseBody,
+    e?.info?.responseStatus,
+  ].filter(Boolean).join(" ");
+  return /response too large|backend response too large/i.test(text);
+}
+
 // --- factory: new tokens ---
 async function indexFactoryRange(from, to) {
   const logs = await provider.getLogs({ address: FACTORY, topics: [TOPIC_CREATED], fromBlock: from, toBlock: to });
@@ -138,6 +149,31 @@ async function insertDecodedTokenLog(log, timestamp, applyState) {
   }, d.args, Boolean(applyState));
 }
 
+async function getAddressScopedLogs(addresses, topics, from, to) {
+  try {
+    return await provider.getLogs({ address: addresses, topics, fromBlock: from, toBlock: to });
+  } catch (e) {
+    if (!isResponseTooLarge(e)) throw e;
+    if (from < to) {
+      const mid = Math.floor((from + to) / 2);
+      const [left, right] = await Promise.all([
+        getAddressScopedLogs(addresses, topics, from, mid),
+        getAddressScopedLogs(addresses, topics, mid + 1, to),
+      ]);
+      return left.concat(right);
+    }
+    if (Array.isArray(addresses) && addresses.length > 1) {
+      const mid = Math.floor(addresses.length / 2);
+      const [left, right] = await Promise.all([
+        getAddressScopedLogs(addresses.slice(0, mid), topics, from, to),
+        getAddressScopedLogs(addresses.slice(mid), topics, from, to),
+      ]);
+      return left.concat(right);
+    }
+    throw e;
+  }
+}
+
 async function indexTokenRange(from, to, opts = {}) {
   const tokens = knownTokenAddresses();
   const addrs = tokens.rows;
@@ -164,10 +200,11 @@ async function indexTokenRange(from, to, opts = {}) {
     }
   }
 
-  // Fallback path: getLogs accepts an address array; chunk it to stay under RPC limits.
-  for (let i = 0; i < addrs.length; i += 100) {
-    const batch = addrs.slice(i, i + 100);
-    const logs = await provider.getLogs({ address: batch, topics: [TOKEN_TOPICS], fromBlock: from, toBlock: to });
+  // Fallback path: getLogs accepts an address array; split hot ranges further
+  // when Base's public RPC rejects a response as too large.
+  for (let i = 0; i < addrs.length; i += TOKEN_ADDRESS_CHUNK) {
+    const batch = addrs.slice(i, i + TOKEN_ADDRESS_CHUNK);
+    const logs = await getAddressScopedLogs(batch, [TOKEN_TOPICS], from, to);
     for (const log of logs) {
       n += await insertDecodedTokenLog(log, timestampFor(log.blockNumber), applyState);
     }
@@ -250,8 +287,13 @@ async function main() {
   console.log("factory backfill complete");
   await fillMissingCreators(ONCE ? 1000 : 50);
   if (!ONCE) liveTokenCursor = await drainLiveTokens(liveTokenCursor, safeHead);
-  tokenCursor = await drainTokens(tokenCursor, factoryCursor, ONCE ? Infinity : 1);
-  if (tokenCursor >= factoryCursor) console.log("event backfill complete");
+  try {
+    tokenCursor = await drainTokens(tokenCursor, factoryCursor, ONCE ? Infinity : 1);
+    if (tokenCursor >= factoryCursor) console.log("event backfill complete");
+  } catch (e) {
+    console.error("event backfill failed:", e.shortMessage || e.message);
+    if (ONCE) throw e;
+  }
   if (ONCE) return;
 
   // live follow
