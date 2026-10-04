@@ -5,7 +5,9 @@ const express = require("express");
 const path = require("path");
 const { ethers } = require("ethers");
 const { db, stmts } = require("./db.js");
-const { mountHistory } = require("./history.js");
+const { mountHistory, seizureCapability } = require("./history.js");
+const { policySnapshot } = require("./policy.js");
+const { PAUSE_FEATURES } = require("./chain.js");
 
 const app = express();
 app.disable("x-powered-by");
@@ -128,6 +130,7 @@ const ROLE_NAMES = new Map([
   [ethers.id("MINT_ROLE").toLowerCase(), "MINT"],
   [ethers.id("BURN_ROLE").toLowerCase(), "BURN"],
   [ethers.id("BURN_BLOCKED_ROLE").toLowerCase(), "BURN BLOCKED"],
+  [ethers.id("SEIZE_ROLE").toLowerCase(), "SEIZE"],
   [ethers.id("PAUSER_ROLE").toLowerCase(), "PAUSE"],
   [ethers.id("PAUSE_ROLE").toLowerCase(), "PAUSE"],
   [ethers.id("UNPAUSE_ROLE").toLowerCase(), "UNPAUSE"],
@@ -135,7 +138,6 @@ const ROLE_NAMES = new Map([
   [ethers.id("META_ROLE").toLowerCase(), "META"],
   [ethers.id("OPERATOR_ROLE").toLowerCase(), "OPERATOR"],
 ]);
-const PAUSE_FEATURES = ["TRANSFER", "MINT", "BURN"];
 const ADMIN_ROLE_VALUES_SQL = [ZERO_ROLE, ethers.id("DEFAULT_ADMIN_ROLE").toLowerCase()]
   .map((role) => `'${role}'`)
   .join(",");
@@ -338,10 +340,10 @@ const q = {
     return { sql: "SELECT COUNT(*) total FROM tokens t" + where, params };
   },
   token: db.prepare("SELECT * FROM tokens WHERE address=? COLLATE NOCASE"),
-  tokenEvents: db.prepare("SELECT kind,block,tx,log_index,ts,args FROM events WHERE token=? COLLATE NOCASE ORDER BY block DESC, log_index DESC"),
-  tokenAnnouncements: db.prepare("SELECT kind,block,tx,log_index,ts,args FROM events WHERE token=? COLLATE NOCASE AND kind IN ('Announcement','EndAnnouncement') ORDER BY block ASC, log_index ASC"),
-  tokenControlEvents: db.prepare("SELECT kind,args,block,log_index FROM events WHERE token=? COLLATE NOCASE AND kind IN ('RoleGranted','RoleRevoked','Paused','Unpaused','PolicyUpdated','SupplyCapUpdated','Memo') ORDER BY block ASC, log_index ASC"),
-  tokenHolders: db.prepare("SELECT account,balance FROM holders WHERE token=? COLLATE NOCASE ORDER BY LENGTH(balance) DESC, balance DESC LIMIT 20"),
+  tokenEvents: db.prepare("SELECT kind,block,tx,log_index,ts,args FROM events WHERE token=? ORDER BY block DESC, log_index DESC"),
+  tokenAnnouncements: db.prepare("SELECT kind,block,tx,log_index,ts,args FROM events INDEXED BY idx_events_token WHERE token=? AND kind IN ('Announcement','EndAnnouncement') ORDER BY block ASC, log_index ASC"),
+  tokenControlEvents: db.prepare("SELECT kind,args,block,log_index FROM events INDEXED BY idx_events_token WHERE token=? AND kind IN ('RoleGranted','RoleRevoked','Paused','Unpaused','PolicyUpdated','SupplyCapUpdated','Memo') ORDER BY block ASC, log_index ASC"),
+  tokenHolders: db.prepare("SELECT account,balance FROM holders WHERE token=? ORDER BY LENGTH(balance) DESC, balance DESC LIMIT 20"),
   deployTimes: db.prepare("SELECT ts FROM tokens WHERE ts IS NOT NULL ORDER BY ts ASC"),
   lastEvent: db.prepare("SELECT ts, block FROM events ORDER BY block DESC, log_index DESC LIMIT 1"),
   feedEvents: db.prepare(`
@@ -483,8 +485,9 @@ function controlsFor(address, tokenRow) {
     if (row.kind === "RoleGranted" || row.kind === "RoleRevoked") {
       const label = roleName(a.role);
       roles[label] ||= new Set();
-      if (row.kind === "RoleGranted") roles[label].add(a.account);
-      else roles[label].delete(a.account);
+      const account = String(a.account).toLowerCase();
+      if (row.kind === "RoleGranted") roles[label].add(account);
+      else roles[label].delete(account);
     } else if (row.kind === "Paused" || row.kind === "Unpaused") {
       const features = Array.isArray(a.features) ? a.features : [];
       for (const f of features) {
@@ -493,7 +496,7 @@ function controlsFor(address, tokenRow) {
         else paused.delete(label);
       }
     } else if (row.kind === "PolicyUpdated") {
-      policy[a.policyScope] = a.newPolicyId;
+      policy[String(a.policyScope).toLowerCase()] = a.newPolicyId;
     } else if (row.kind === "SupplyCapUpdated") {
       supplyCap = a.newSupplyCap;
     } else if (row.kind === "Memo") {
@@ -509,6 +512,8 @@ function controlsFor(address, tokenRow) {
     ),
     paused: [...paused],
     policy,
+    policy_details: policySnapshot(db, address).current_scopes,
+    seizure: seizureCapability(db, address),
     memo: latestMemo,
     supply_cap: supplyCap,
   };

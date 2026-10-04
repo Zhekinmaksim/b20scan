@@ -13,8 +13,8 @@
 // UNIQUE(tx, log_index) makes overlapping ranges idempotent.
 require("dotenv").config();
 const { ethers } = require("ethers");
-const { FACTORY, TOPIC_CREATED, TOKEN_TOPICS, decodeCreated, decodeTokenLog } = require("./chain.js");
-const { stmts, insertEventAndMaybeApply } = require("./db.js");
+const { FACTORY, POLICY_REGISTRY, TOPIC_CREATED, TOKEN_TOPICS, REGISTRY_TOPICS, tokenIface, decodeCreated, decodeTokenLog, decodeRegistryLog } = require("./chain.js");
+const { db, stmts, insertEventAndMaybeApply, insertRegistryEvent } = require("./db.js");
 
 const RPC_URL = process.env.RPC_URL || "https://mainnet.base.org";
 const CHAIN_ID = Number(process.env.CHAIN_ID || 8453);
@@ -31,6 +31,16 @@ const LIVE_CHUNK = Number(process.env.LIVE_CHUNK || 25);
 const LIVE_LOOKBACK = Number(process.env.LIVE_LOOKBACK || 300);
 const ONCE = process.argv.includes("--once");
 const FILL_CREATORS = process.argv.includes("--fill-creators");
+const COBALT_BACKFILL = process.argv.includes("--cobalt-backfill");
+const REGISTRY_CHUNK = Number(process.env.REGISTRY_CHUNK || 1000);
+const SEIZE_CHUNK = Number(process.env.SEIZE_CHUNK || 1000);
+// Base mainnet activation: September 30, 2026, 18:00 UTC. Overrides support
+// other networks and deterministic tests without changing existing cursors.
+const COBALT_TIMESTAMP = Number(process.env.COBALT_TIMESTAMP || 1790791200);
+const SEIZED_TOPIC = tokenIface.getEvent("Seized").topicHash;
+const advanceCursorStmt = db.prepare(`INSERT INTO meta(key,value) VALUES(?,?)
+  ON CONFLICT(key) DO UPDATE SET value=excluded.value
+  WHERE CAST(excluded.value AS INTEGER) > CAST(meta.value AS INTEGER)`);
 
 const provider = new ethers.JsonRpcProvider(RPC_URL, CHAIN_ID, {
   staticNetwork: ethers.Network.from(CHAIN_ID),
@@ -112,7 +122,7 @@ function isResponseTooLarge(e) {
     e?.info?.responseBody,
     e?.info?.responseStatus,
   ].filter(Boolean).join(" ");
-  return /response too large|backend response too large/i.test(text);
+  return /response too large|payload too large|\b413\b|block range.*(?:too large|exceed)/i.test(text);
 }
 
 // --- factory: new tokens ---
@@ -226,6 +236,74 @@ async function indexTokenRange(from, to, opts = {}) {
   return n;
 }
 
+async function cobaltStartBlock(head) {
+  if (process.env.COBALT_START_BLOCK) return Number(process.env.COBALT_START_BLOCK);
+  const saved = stmts.getMeta.get("cobalt_start_block");
+  if (saved) return Number(saved.value);
+  if ((await blockTs(head)) < COBALT_TIMESTAMP) return null;
+  let low = START_BLOCK, high = head;
+  while (low < high) {
+    const mid = Math.floor((low + high) / 2);
+    if ((await blockTs(mid)) < COBALT_TIMESTAMP) low = mid + 1;
+    else high = mid;
+  }
+  setCursor("cobalt_start_block", low);
+  return low;
+}
+
+async function indexRegistryRange(from, to) {
+  const logs = await getAddressScopedLogs(POLICY_REGISTRY, [REGISTRY_TOPICS], from, to);
+  let count = 0;
+  for (const log of logs) {
+    const decoded = decodeRegistryLog(log);
+    if (!decoded) continue;
+    count += insertRegistryEvent({ kind: decoded.kind, block: log.blockNumber,
+      tx: log.transactionHash, log_index: log.index, ts: await blockTs(log.blockNumber),
+      args: JSON.stringify(decoded.args) }, decoded.args);
+  }
+  return count;
+}
+
+async function indexSeizeRange(from, to) {
+  const logs = await getTopicScopedLogs([SEIZED_TOPIC], from, to);
+  const tokens = knownTokenAddresses();
+  let count = 0;
+  for (const log of logs) {
+    if (!isKnownB20Emitter(log.address, tokens.set)) continue;
+    // Transfer already updates balances. Seized is evidence of the operation,
+    // never a second balance change or a supply burn.
+    count += await insertDecodedTokenLog(log, await blockTs(log.blockNumber), false);
+  }
+  return count;
+}
+
+async function drainNewStream(key, start, safeHead, chunk, indexRange, maxRanges) {
+  let progress = cursor(key, start - 1);
+  let processed = 0;
+  while (progress < safeHead && processed < maxRanges) {
+    // A manual backfill may run alongside the follower; cursors only advance.
+    progress = Math.max(progress, cursor(key, start - 1));
+    if (progress >= safeHead) break;
+    const concurrency = maxRanges === Infinity ? 4 : 1;
+    const ranges = Array.from({ length: Math.min(concurrency, Math.ceil((safeHead - progress) / chunk)) }, (_, i) => ({
+      from: progress + i * chunk + 1, to: Math.min(progress + (i + 1) * chunk, safeHead),
+    }));
+    const counts = await Promise.all(ranges.map((range) => indexRange(range.from, range.to)));
+    const to = ranges.at(-1).to;
+    const count = counts.reduce((sum, n) => sum + n, 0);
+    advanceCursorStmt.run(key, String(to));
+    progress = to;
+    processed += ranges.length;
+    if (count || COBALT_BACKFILL) console.log(`  ${key} -> ${to} (+${count}, ${safeHead - to} behind)`);
+  }
+}
+
+async function followCobalt(safeHead, maxRanges = 1) {
+  await drainNewStream("registry_cursor", START_BLOCK, safeHead, REGISTRY_CHUNK, indexRegistryRange, maxRanges);
+  const start = await cobaltStartBlock(safeHead);
+  if (start != null) await drainNewStream("seize_cursor", start, safeHead, SEIZE_CHUNK, indexSeizeRange, maxRanges);
+}
+
 async function processFactoryRange(from, to) {
   await indexFactoryRange(from, to);
   setCursor("factory_cursor", to);
@@ -294,6 +372,16 @@ async function main() {
 
   console.log(`b20scan indexer | chain ${CHAIN_ID} | head ${head} | safe ${safeHead} | factory ${factoryCursor} | events ${tokenCursor} | live ${liveTokenCursor}`);
 
+  if (COBALT_BACKFILL) {
+    // Use only already discovered tokens. Do not race the main follower's
+    // factory cursor or apply Transfer balances during this additive backfill.
+    await followCobalt(Math.min(factoryCursor, safeHead), Infinity);
+    console.log("Cobalt and PolicyRegistry backfill complete");
+    provider.destroy();
+    db.close();
+    return;
+  }
+
   // Factory first: deployments are the explorer's primary live surface. Token
   // event backfill follows on its own cursor, so a growing address array can
   // never make the deployment list look days old.
@@ -308,6 +396,12 @@ async function main() {
     console.error("event backfill failed:", e.shortMessage || e.message);
     if (ONCE) throw e;
   }
+  try {
+    await followCobalt(safeHead, ONCE ? Infinity : 1);
+  } catch (e) {
+    console.error("Cobalt backfill failed:", e.shortMessage || e.message);
+    if (ONCE) throw e;
+  }
   if (ONCE) return;
 
   // live follow
@@ -319,6 +413,11 @@ async function main() {
       await fillMissingCreators(25);
       liveTokenCursor = await drainLiveTokens(liveTokenCursor, h);
       tokenCursor = await drainTokens(tokenCursor, factoryCursor, 1);
+      try {
+        await followCobalt(h);
+      } catch (e) {
+        console.error("Cobalt tick failed:", e.shortMessage || e.message);
+      }
     } catch (e) {
       console.error("live tick failed:", e.shortMessage || e.message);
     }

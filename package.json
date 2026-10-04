@@ -8,7 +8,7 @@
     "index": "node indexer.js",
     "backfill": "node indexer.js --once",
     "mcp": "node mcp-server.js",
-    "test": "node --check chain.js && node --check db.js && node --check history.js && node --check mcp-server.js && node --check indexer.js && node --check server.js"
+    "test": "node --check chain.js && node --check db.js && node --check policy.js && node --check history.js && node --check mcp-server.js && node --check indexer.js && node --check server.js && node --test tests/cobalt.test.js"
   },
   "keywords": [],
   "author": "",

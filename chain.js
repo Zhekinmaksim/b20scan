@@ -2,6 +2,7 @@
 const { ethers } = require("ethers");
 
 const FACTORY = "0xB20f000000000000000000000000000000000000";
+const POLICY_REGISTRY = "0x8453000000000000000000000000000000000002";
 
 const factoryIface = new ethers.Interface([
   "event B20Created(address indexed token, uint8 indexed variant, string name, string symbol, uint8 decimals, bytes variantEventParams)",
@@ -18,6 +19,7 @@ const tokenIface = new ethers.Interface([
   "event RoleGranted(bytes32 indexed role, address indexed account, address indexed sender)",
   "event RoleRevoked(bytes32 indexed role, address indexed account, address indexed sender)",
   "event BurnedBlocked(address indexed caller, address indexed from, uint256 amount)",
+  "event Seized(address indexed caller, address indexed from, address indexed to, uint256 amount)",
   "event Announcement(address indexed caller, string id, string description, string uri)",
   "event EndAnnouncement(string id)",
   "event ExtraMetadataUpdated(string key, string value)",
@@ -26,9 +28,22 @@ const tokenIface = new ethers.Interface([
 ]);
 const TOKEN_TOPICS = [
   "Transfer", "Memo", "SupplyCapUpdated", "Paused", "Unpaused",
-  "PolicyUpdated", "RoleGranted", "RoleRevoked", "BurnedBlocked",
+  "PolicyUpdated", "RoleGranted", "RoleRevoked", "BurnedBlocked", "Seized",
   "Announcement", "EndAnnouncement", "ExtraMetadataUpdated",
 ].map((n) => tokenIface.getEvent(n).topicHash);
+
+const registryIface = new ethers.Interface([
+  "event PolicyCreated(uint64 indexed policyId, address indexed creator, uint8 policyType)",
+  "event CompositePolicyUpdated(uint64 indexed policyId, address indexed updater, uint64[] childPolicyIds)",
+]);
+const REGISTRY_TOPICS = ["PolicyCreated", "CompositePolicyUpdated"]
+  .map((name) => registryIface.getEvent(name).topicHash);
+
+const POLICY_SCOPES = Object.fromEntries([
+  "TRANSFER_SENDER_POLICY", "TRANSFER_RECEIVER_POLICY", "TRANSFER_EXECUTOR_POLICY",
+  "MINT_RECEIVER_POLICY", "SEIZE_EXEMPT_POLICY", "SEIZE_RECEIVER_POLICY",
+].map((name) => [ethers.id(name).toLowerCase(), name]));
+const PAUSE_FEATURES = ["TRANSFER", "MINT", "BURN", "SEIZE"];
 
 // Decodes B20Created; for the STABLECOIN variant also decodes the currency code
 // out of variantEventParams (abi-encoded B20StablecoinEventParams{version,currency}).
@@ -54,9 +69,9 @@ function decodeCreated(log) {
   };
 }
 
-function decodeTokenLog(log) {
+function decodeLog(iface, log) {
   try {
-    const d = tokenIface.parseLog(log);
+    const d = iface.parseLog(log);
     const args = {};
     d.fragment.inputs.forEach((inp, i) => {
       const v = d.args[i];
@@ -68,4 +83,11 @@ function decodeTokenLog(log) {
   }
 }
 
-module.exports = { FACTORY, TOPIC_CREATED, TOKEN_TOPICS, factoryIface, tokenIface, decodeCreated, decodeTokenLog };
+const decodeTokenLog = (log) => decodeLog(tokenIface, log);
+const decodeRegistryLog = (log) => decodeLog(registryIface, log);
+
+module.exports = {
+  FACTORY, POLICY_REGISTRY, TOPIC_CREATED, TOKEN_TOPICS, REGISTRY_TOPICS,
+  POLICY_SCOPES, PAUSE_FEATURES, factoryIface, tokenIface, registryIface,
+  decodeCreated, decodeTokenLog, decodeRegistryLog,
+};

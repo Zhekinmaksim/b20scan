@@ -58,6 +58,25 @@ CREATE TABLE IF NOT EXISTS account_types (
   type TEXT NOT NULL,
   updated_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS policy_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  policy_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  block INTEGER NOT NULL, tx TEXT NOT NULL, log_index INTEGER NOT NULL, ts INTEGER,
+  args TEXT NOT NULL,
+  UNIQUE(tx, log_index)
+);
+CREATE INDEX IF NOT EXISTS idx_policy_events_policy ON policy_events(policy_id, block DESC, log_index DESC);
+CREATE TABLE IF NOT EXISTS policy_state (
+  policy_id TEXT PRIMARY KEY,
+  policy_type INTEGER,
+  creator TEXT,
+  created_block INTEGER,
+  child_policy_ids TEXT,
+  updated_block INTEGER,
+  updated_log_index INTEGER,
+  updated_ts INTEGER
+);
 `);
 
 const eventCols = db.prepare("PRAGMA table_info(events)").all().map((c) => c.name);
@@ -215,4 +234,32 @@ function insertEventAndMaybeApply(event, args, applyState) {
   return changes;
 }
 
-module.exports = { db, stmts, applyTransfer, insertEventAndMaybeApply };
+const insertPolicyEvent = db.prepare(`INSERT OR IGNORE INTO policy_events
+  (policy_id,kind,block,tx,log_index,ts,args)
+  VALUES (@policy_id,@kind,@block,@tx,@log_index,@ts,@args)`);
+const setPolicyType = db.prepare(`INSERT INTO policy_state(policy_id,policy_type,creator,created_block)
+  VALUES(?,?,?,?) ON CONFLICT(policy_id) DO UPDATE SET
+  policy_type=excluded.policy_type, creator=excluded.creator, created_block=excluded.created_block`);
+const setPolicyChildren = db.prepare(`INSERT INTO policy_state
+  (policy_id,child_policy_ids,updated_block,updated_log_index,updated_ts)
+  VALUES(?,?,?,?,?) ON CONFLICT(policy_id) DO UPDATE SET
+  child_policy_ids=excluded.child_policy_ids, updated_block=excluded.updated_block,
+  updated_log_index=excluded.updated_log_index, updated_ts=excluded.updated_ts
+  WHERE policy_state.updated_block IS NULL OR excluded.updated_block > policy_state.updated_block
+    OR (excluded.updated_block=policy_state.updated_block AND excluded.updated_log_index > policy_state.updated_log_index)`);
+
+// Registry events are global, never token events. Live reads can arrive before
+// older backfill; only the latest composite update may replace current state.
+const insertRegistryEvent = db.transaction((event, args) => {
+  const policyId = String(args.policyId);
+  const changes = insertPolicyEvent.run({ ...event, policy_id: policyId }).changes;
+  if (!changes) return 0;
+  if (event.kind === "PolicyCreated") {
+    setPolicyType.run(policyId, Number(args.policyType), args.creator, event.block);
+  } else if (event.kind === "CompositePolicyUpdated") {
+    setPolicyChildren.run(policyId, JSON.stringify(args.childPolicyIds.map(String)), event.block, event.log_index, event.ts);
+  }
+  return changes;
+});
+
+module.exports = { db, stmts, applyTransfer, insertEventAndMaybeApply, insertRegistryEvent };

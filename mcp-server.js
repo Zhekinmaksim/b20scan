@@ -62,7 +62,7 @@ const TOOLS = [
   },
   {
     name: "b20_seizure_history",
-    description: "Get freeze-and-seize history for a B20 token: capability status none/armed/enforced, seizure count, victim addresses, amounts, and timestamps. Use for issuer/custody risk analysis; direct precompile readers cannot answer historical 'has it ever seized funds?'.",
+    description: "Get B20 seizure history: legacy burnBlocked burns and Cobalt seize reassignments, including destination, exact amounts, timestamps, and status none/armed/enforced. currently_armed reports current role/policy/pause configuration separately from past enforcement; it does not test authorization of specific holders. Use for issuer/custody risk analysis.",
     schema: {
       type: "object",
       properties: {
@@ -77,7 +77,7 @@ const TOOLS = [
   },
   {
     name: "b20_policy_timeline",
-    description: "Get transfer-policy history for a B20 token: whether a policy is currently bound and every policy attach/change over time. Use to determine whether and when a token became permissioned.",
+    description: "Get policy history for all B20 token scopes, including seize exempt/receiver scopes. Resolve global PolicyRegistry types and UNION (OR) / INTERSECT (AND) children, plus composite update history. Use to inspect permissioning and compliance configuration.",
     schema: {
       type: "object",
       properties: { address: { type: "string" } },
@@ -87,7 +87,7 @@ const TOOLS = [
   },
   {
     name: "b20_roles_history",
-    description: "Get full grant/revoke timeline of issuer roles for a B20 token. Use to see how token control changed over time: who received or lost MINT, BURN, BURN BLOCKED, PAUSE, META, OPERATOR, or ADMIN powers.",
+    description: "Get full grant/revoke timeline of issuer roles for a B20 token. Use to see who received or lost MINT, BURN, BURN BLOCKED, SEIZE, PAUSE, META, OPERATOR, or ADMIN powers.",
     schema: {
       type: "object",
       properties: {

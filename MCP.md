@@ -9,8 +9,8 @@ duplicate indexer logic.
 ## Tools
 
 - `b20_token_overview` — current token profile and controls
-- `b20_seizure_history` — seizure capability and historical `BurnedBlocked` records
-- `b20_policy_timeline` — policy binding/change timeline
+- `b20_seizure_history` — legacy `BurnedBlocked` burns and Cobalt `Seized` reassignments, destinations and current configuration
+- `b20_policy_timeline` — all policy scopes, global registry types, composite children and update history
 - `b20_roles_history` — grant/revoke timeline for issuer roles
 - `b20_current_roles` — current role holders folded from history
 - `b20_supply_history` — supply-cap changes plus mint/burn flow
@@ -59,3 +59,12 @@ The `history` endpoint accepts:
 
 The `supply` category intentionally returns only `SupplyCapUpdated`; mint/burn
 flow is available from the dedicated `/supply/history` endpoint.
+
+`status: enforced` means at least one seizure was indexed in the past;
+`currently_armed` separately reports active seizure configuration. Revoked roles,
+cleared policies and paused operations do not count as currently armed. It is a
+configuration signal, not an authorization check for a particular holder.
+
+`/policy` keeps the existing `current`/`history` fields and adds `current_scopes`,
+`current_detail`, `composites`, and paginated `registry_history`. Policy IDs and
+amounts are strings to preserve uint64/uint256 precision. See [COBALT.md](COBALT.md).

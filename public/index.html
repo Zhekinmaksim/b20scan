@@ -809,7 +809,7 @@ function feedLine(e){
 
 function paneForEvent(kind){
   if(kind==="RoleGranted"||kind==="RoleRevoked"||kind==="SupplyCapUpdated"||kind==="Paused"||kind==="Unpaused"||kind==="PolicyUpdated"||kind==="ExtraMetadataUpdated")return "controls";
-  if(kind==="Transfer"||kind==="Memo"||kind==="BurnedBlocked")return "activity";
+  if(kind==="Transfer"||kind==="Memo"||kind==="BurnedBlocked"||kind==="Seized")return "activity";
   return "overview";
 }
 
@@ -890,7 +890,9 @@ function detailHtml(t,loading){
   const roleLabels=Object.keys(roles);
   const paused=controls.paused||[];
   const policy=controls.policy||{};
-  const policyValues=Object.values(policy).filter(v=>v!==undefined&&v!==null);
+  const policyValues=Object.values(policy).filter(v=>v!==undefined&&v!==null&&String(v)!=="0");
+  const policyDetails=controls.policy_details||[];
+  const seizure=controls.seizure||{};
   const decimals=live.decimals??t.decimals??0;
   const supply=live.total_supply??t.total_supply??"0";
   const supplyCap=live.supply_cap??controls.supply_cap;
@@ -920,6 +922,7 @@ function detailHtml(t,loading){
     ["minting",mintable?"ENABLED":"not detected",mintable?"warn":"ok"],
     ["burning",burnable?"ENABLED":"not detected",burnable?"warn":"ok"],
     ["transfers",transferPaused?"PAUSED":"active",transferPaused?"warn":"ok"],
+    ["seizing",paused.includes("SEIZE")?"PAUSED":seizure.currently_armed?"CONFIGURED":"not configured",seizure.currently_armed?"warn":"ok"],
     ["metadata",metadataMutable?"MUTABLE":"fixed / not detected",metadataMutable?"warn":"ok"],
     ["admin type",adminTypeLabel,adminTypes.includes("CONTRACT")?"warn":"ok"],
     ["supply cap",capH,uncapped?"warn":"ok"],
@@ -985,11 +988,13 @@ function detailHtml(t,loading){
           <div class="kv"><b>transfers</b><span>${paused.includes("TRANSFER")?"paused":"active"}</span></div>
           <div class="kv"><b>mint</b><span>${paused.includes("MINT")?"paused":"active"}</span></div>
           <div class="kv"><b>burn</b><span>${paused.includes("BURN")?"paused":"active"}</span></div>
+          <div class="kv"><b>seize</b><span>${paused.includes("SEIZE")?"paused":hasRole("SEIZE")?"role granted":"no role detected"}</span></div>
+          <div class="kv"><b>seizure history</b><span>${fmtN(seizure.total_seizures||0)} recorded${seizure.status==="enforced"?" · enforced":""}</span></div>
           <div class="kv"><b>paused features</b><span>${paused.length?paused.map(esc).join(" / "):"none"}</span></div>
         </div>
         <div class="dcol">
           <h3>policy</h3>
-          <div class="kv"><b>transfer policy</b><span>${policyValues.length?policyValues.map(v=>"#"+esc(v)).join(" / "):"none"}</span></div>
+          ${policyDetails.length?policyDetails.map(item=>`<div class="kv"><b>${esc(policyScopeLabel(item.scope_name))}</b><span>${policyDetailHtml(item.detail)}</span></div>`).join(""):`<div class="kv"><b>bound policies</b><span>${policyValues.length?policyValues.map(v=>"#"+esc(v)).join(" / "):"none"}</span></div>`}
           ${currency?`<div class="kv"><b>currency</b><span>${esc(currency)}</span></div>`:""}
         </div>
       </div>`)}
@@ -999,6 +1004,16 @@ function detailHtml(t,loading){
         ${activityPageHtml(t,loading)}
       </div>`)}
   </div>`;
+}
+function policyScopeLabel(name){return String(name||"policy").replace(/_POLICY$/," ").trim().replace(/_/g," ").toLowerCase()}
+function policyDetailHtml(detail){
+  if(!detail)return "not indexed";
+  if(detail.builtin)return esc(detail.builtin.replace(/_/g," ").toLowerCase());
+  const label=`#${esc(detail.policy_id)} · ${esc(detail.type)}`;
+  const comp=detail.composite;
+  if(!comp)return label;
+  const operator=comp.kind==="UNION"?" OR ":comp.kind==="INTERSECT"?" AND ":" / ";
+  return label+"<br>"+comp.children.map(child=>`#${esc(child.policy_id)} (${esc(child.type)})`).join(esc(operator));
 }
 function closeDetail(e){e?.stopPropagation();activeDetailAddr="";activeDetailIndex=-1;activeDetailMode="inline";clearTokenRoute();renderRows()}
 function setDetailPane(e,pane){e?.stopPropagation();activeDetailPane=pane;renderRows()}
@@ -1057,14 +1072,17 @@ function attachMemoPayload(e,memo){
 }
 function activityEvents(events){
   const memosByPrev=new Map();
+  const memosByIndex=new Map();
   const attachedMemos=new Set();
   events.forEach((e,i)=>{
     if(e.kind!=="Memo"||!e.tx||e.log_index===undefined||e.log_index===null)return;
     const prev=Number(e.log_index)-1;
     memosByPrev.set(`${e.tx}:${prev}`,{event:e,index:i});
+    memosByIndex.set(`${e.tx}:${Number(e.log_index)}`,e);
   });
   const out=events.map(e=>{
     if(!e.tx||e.log_index===undefined||e.log_index===null)return e;
+    if(e.kind==="Seized")return attachMemoPayload(e,memosByIndex.get(`${e.tx}:${Number(e.log_index)-1}`));
     const hit=memosByPrev.get(`${e.tx}:${Number(e.log_index)}`);
     if(!hit)return e;
     attachedMemos.add(hit.index);
@@ -1078,7 +1096,8 @@ function eventParts(e,t){
   const attachedMemoRaw=e.attachedMemo||null;
   if(e.kind==="Transfer")return {from:a.from,to:a.to,amount:amountFor(a.amount,t.live?.decimals??t.decimals??0),memo:attachedMemo||"—",memoRaw:attachedMemoRaw};
   if(e.kind==="Memo")return {from:a.caller||a.from||a.account||a.sender,to:a.to,amount:amountFor(a.amount,t.live?.decimals??t.decimals??0),memo:memoText(a.memo),memoRaw:a.memo};
-  if(e.kind==="BurnedBlocked")return {from:a.from,to:a.caller,amount:amountFor(a.amount,t.live?.decimals??t.decimals??0),memo:attachedMemo||"—",memoRaw:attachedMemoRaw};
+  if(e.kind==="BurnedBlocked")return {from:a.from,to:"0x0000000000000000000000000000000000000000",amount:amountFor(a.amount,t.live?.decimals??t.decimals??0),memo:"blocked balance burned"};
+  if(e.kind==="Seized")return {from:a.from,to:a.to,amount:amountFor(a.amount,t.live?.decimals??t.decimals??0),memo:attachedMemo||"balance reassigned",memoRaw:attachedMemoRaw};
   if(e.kind==="SupplyCapUpdated")return {from:"—",to:"—",amount:amountFor(a.newSupplyCap,t.live?.decimals??t.decimals??0),memo:"supply cap updated"};
   if(e.kind==="RoleGranted"||e.kind==="RoleRevoked")return {from:a.role?.slice(0,10),to:a.account,amount:"—",memo:e.kind==="RoleGranted"?"role granted":"role revoked"};
   if(e.kind==="Paused"||e.kind==="Unpaused")return {from:"—",to:"—",amount:"—",memo:JSON.stringify(a).slice(0,80)};
