@@ -84,6 +84,8 @@ app.use("/api", apiRateLimit, (req, res, next) => {
 mountHistory(app, db);
 
 const provider = createRpcProvider({ timeout: Number(process.env.RPC_WEB_TIMEOUT_MS || 1000) });
+// Health must not wait behind a page's concurrent contract/name reads.
+const headProvider = createRpcProvider({ timeout: Number(process.env.RPC_WEB_TIMEOUT_MS || 1000), concurrency: 1 });
 const token = new ethers.Interface([
   "function name() view returns (string)",
   "function symbol() view returns (string)",
@@ -574,7 +576,7 @@ function localHealthMeta() {
 
 app.get("/api/health", async (_, res) => {
   try {
-    const chainHead = await withTimeout(provider.getBlockNumber(), 2_000);
+    const chainHead = await withTimeout(headProvider.getBlockNumber(), 2_000);
     const local = localHealthMeta();
     res.json({
       ...healthLag(chainHead, local),
