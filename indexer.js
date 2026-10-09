@@ -15,6 +15,7 @@ require("dotenv").config();
 const { ethers } = require("ethers");
 const { FACTORY, POLICY_REGISTRY, TOPIC_CREATED, TOKEN_TOPICS, REGISTRY_TOPICS, tokenIface, decodeCreated, decodeTokenLog, decodeRegistryLog } = require("./chain.js");
 const { db, stmts, insertEventAndMaybeApply, insertRegistryEvent } = require("./db.js");
+const { createRpcProvider, isLogRangeError } = require("./rpc.js");
 
 const RPC_URL = process.env.RPC_URL || "https://mainnet.base.org";
 const CHAIN_ID = Number(process.env.CHAIN_ID || 8453);
@@ -34,6 +35,8 @@ const FILL_CREATORS = process.argv.includes("--fill-creators");
 const COBALT_BACKFILL = process.argv.includes("--cobalt-backfill");
 const REGISTRY_CHUNK = Number(process.env.REGISTRY_CHUNK || 1000);
 const SEIZE_CHUNK = Number(process.env.SEIZE_CHUNK || 1000);
+const EVENT_RANGES_PER_TICK = Math.max(1, Number(process.env.EVENT_RANGES_PER_TICK || 1));
+const COBALT_RANGES_PER_TICK = Math.max(1, Number(process.env.COBALT_RANGES_PER_TICK || 1));
 // Base mainnet activation: September 30, 2026, 18:00 UTC. Overrides support
 // other networks and deterministic tests without changing existing cursors.
 const COBALT_TIMESTAMP = Number(process.env.COBALT_TIMESTAMP || 1790791200);
@@ -42,17 +45,11 @@ const advanceCursorStmt = db.prepare(`INSERT INTO meta(key,value) VALUES(?,?)
   ON CONFLICT(key) DO UPDATE SET value=excluded.value
   WHERE CAST(excluded.value AS INTEGER) > CAST(meta.value AS INTEGER)`);
 
-const provider = new ethers.JsonRpcProvider(RPC_URL, CHAIN_ID, {
-  staticNetwork: ethers.Network.from(CHAIN_ID),
-  // Base's public endpoint has an unusually strict batch limit. Disabling
-  // batching avoids a single rejected batch taking down the whole indexer.
-  batchMaxCount: 1,
-  batchStallTime: 0,
-});
+const B20_ADDRESS_PREFIX = "0xb200";
+const provider = createRpcProvider({ url: RPC_URL, chainId: CHAIN_ID, logAddressPrefix: B20_ADDRESS_PREFIX });
 const tsCache = new Map();
 const txFromCache = new Map();
-const B20_ADDRESS_PREFIX = "0xb200";
-let tokenAddressCache = { count: -1, rows: [], set: new Set() };
+let tokenAddressCache = { count: -1, rows: [], set: new Set(), canonical: new Map() };
 
 async function blockTs(bn) {
   if (!tsCache.has(bn)) {
@@ -105,6 +102,7 @@ function knownTokenAddresses() {
       count,
       rows,
       set: new Set(rows.map((a) => a.toLowerCase())),
+      canonical: new Map(rows.map(a => [a.toLowerCase(), a])),
     };
   }
   return tokenAddressCache;
@@ -116,18 +114,12 @@ function isKnownB20Emitter(address, addrSet) {
 }
 
 function isResponseTooLarge(e) {
-  const text = [
-    e?.shortMessage,
-    e?.message,
-    e?.info?.responseBody,
-    e?.info?.responseStatus,
-  ].filter(Boolean).join(" ");
-  return /response too large|payload too large|\b413\b|block range.*(?:too large|exceed)/i.test(text);
+  return isLogRangeError(e);
 }
 
 // --- factory: new tokens ---
 async function indexFactoryRange(from, to) {
-  const logs = await provider.getLogs({ address: FACTORY, topics: [TOPIC_CREATED], fromBlock: from, toBlock: to });
+  const logs = await getAddressScopedLogs(FACTORY, [TOPIC_CREATED], from, to);
   // A public RPC cannot sustain one `getBlock` plus one transaction lookup for
   // every deployment. Two boundary blocks give accurate-enough display times
   // within a CHUNK and keep the factory sweep responsive as B20 volume grows.
@@ -150,11 +142,12 @@ async function indexFactoryRange(from, to) {
 }
 
 // --- tokens: transfers, memos, admin events ---
-async function insertDecodedTokenLog(log, timestamp, applyState) {
+function insertDecodedTokenLog(log, timestamp, applyState) {
   const d = decodeTokenLog(log);
   if (!d) return 0;
   return insertEventAndMaybeApply({
-    token: log.address, kind: d.kind, block: log.blockNumber, tx: log.transactionHash,
+    token: tokenAddressCache.canonical.get(log.address.toLowerCase()) || log.address,
+    kind: d.kind, block: log.blockNumber, tx: log.transactionHash,
     log_index: log.index, ts: timestamp, args: JSON.stringify(d.args),
   }, d.args, Boolean(applyState));
 }
@@ -213,13 +206,18 @@ async function indexTokenRange(from, to, opts = {}) {
   if (opts.topicFirst !== false) {
     try {
       const logs = await getTopicScopedLogs([TOKEN_TOPICS], from, to);
-      for (const log of logs) {
-        if (!isKnownB20Emitter(log.address, tokens.set)) continue;
-        n += await insertDecodedTokenLog(log, timestampFor(log.blockNumber), applyState);
-      }
-      return n;
+      return db.transaction(() => {
+        for (const log of logs) {
+          if (!isKnownB20Emitter(log.address, tokens.set)) continue;
+          n += insertDecodedTokenLog(log, timestampFor(log.blockNumber), applyState);
+        }
+        return n;
+      })();
     } catch (e) {
-      if (opts.fallback === false) throw e;
+      // Do not turn rate limits or oversized responses into thousands of
+      // address-array queries. Only use that path for RPCs requiring address.
+      const reason = e.error?.message || e.info?.error?.message || e.message || '';
+      if (opts.fallback === false || !/address.*(?:required|must)|must.*address|without.*address/i.test(reason)) throw e;
       console.warn(`  topic-first events failed ${from}-${to}, falling back to address scan: ${e.shortMessage || e.message}`);
     }
   }
@@ -229,9 +227,9 @@ async function indexTokenRange(from, to, opts = {}) {
   for (let i = 0; i < addrs.length; i += TOKEN_ADDRESS_CHUNK) {
     const batch = addrs.slice(i, i + TOKEN_ADDRESS_CHUNK);
     const logs = await getAddressScopedLogs(batch, [TOKEN_TOPICS], from, to);
-    for (const log of logs) {
-      n += await insertDecodedTokenLog(log, timestampFor(log.blockNumber), applyState);
-    }
+    db.transaction(() => {
+      for (const log of logs) n += insertDecodedTokenLog(log, timestampFor(log.blockNumber), applyState);
+    })();
   }
   return n;
 }
@@ -390,14 +388,14 @@ async function main() {
   await fillMissingCreators(ONCE ? 1000 : 50);
   if (!ONCE) liveTokenCursor = await drainLiveTokens(liveTokenCursor, safeHead);
   try {
-    tokenCursor = await drainTokens(tokenCursor, factoryCursor, ONCE ? Infinity : 1);
+    tokenCursor = await drainTokens(tokenCursor, factoryCursor, ONCE ? Infinity : EVENT_RANGES_PER_TICK);
     if (tokenCursor >= factoryCursor) console.log("event backfill complete");
   } catch (e) {
-    console.error("event backfill failed:", e.shortMessage || e.message);
+    console.error("event backfill failed:", e.error?.message || e.shortMessage || e.message);
     if (ONCE) throw e;
   }
   try {
-    await followCobalt(safeHead, ONCE ? Infinity : 1);
+    await followCobalt(safeHead, ONCE ? Infinity : COBALT_RANGES_PER_TICK);
   } catch (e) {
     console.error("Cobalt backfill failed:", e.shortMessage || e.message);
     if (ONCE) throw e;
@@ -412,14 +410,14 @@ async function main() {
       factoryCursor = await drainFactory(factoryCursor, h);
       await fillMissingCreators(25);
       liveTokenCursor = await drainLiveTokens(liveTokenCursor, h);
-      tokenCursor = await drainTokens(tokenCursor, factoryCursor, 1);
+      tokenCursor = await drainTokens(tokenCursor, factoryCursor, EVENT_RANGES_PER_TICK);
       try {
-        await followCobalt(h);
+        await followCobalt(h, COBALT_RANGES_PER_TICK);
       } catch (e) {
         console.error("Cobalt tick failed:", e.shortMessage || e.message);
       }
     } catch (e) {
-      console.error("live tick failed:", e.shortMessage || e.message);
+      console.error("live tick failed:", e.error?.message || e.shortMessage || e.message);
     }
   }
 }

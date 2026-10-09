@@ -11,7 +11,7 @@ const { ethers } = require("ethers");
 
 process.env.DB_PATH = ":memory:";
 const { db, stmts, insertEventAndMaybeApply, insertRegistryEvent } = require("../db.js");
-const { tokenIface, registryIface, POLICY_REGISTRY, decodeTokenLog, decodeRegistryLog } = require("../chain.js");
+const { tokenIface, registryIface, FACTORY, POLICY_REGISTRY, decodeTokenLog, decodeRegistryLog } = require("../chain.js");
 const { mountHistory, seizureCapability } = require("../history.js");
 
 const token = "0xb200000000000000000000000000000000000013";
@@ -147,6 +147,17 @@ test("current seizure configuration honors exact scopes, revoked roles and pause
   assert.equal(seizureCapability(db, token).currently_armed, false);
 });
 
+test("issuer admin materialization uses canonical token events across grant, revoke and regrant", () => {
+  const role = ethers.ZeroHash;
+  const state = () => db.prepare("SELECT admin_active FROM tokens WHERE address=?").get(other).admin_active;
+  add("RoleGranted", [role, caller, caller], 900, 0, other);
+  assert.equal(state(), 1);
+  add("RoleRevoked", [role, caller, caller], 901, 0, other);
+  assert.equal(state(), 0);
+  add("RoleGranted", [role, caller, caller], 902, 0, other);
+  assert.equal(state(), 1);
+});
+
 test("real indexer backfills separate Registry and Seized streams through JSON-RPC", async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "b20scan-cobalt-test-"));
   const dbPath = path.join(dir, "test.db");
@@ -159,6 +170,8 @@ test("real indexer backfills separate Registry and Seized streams through JSON-R
     encoded(registryIface, "PolicyCreated", [newId, caller, 2], POLICY_REGISTRY, 1012, 0),
     encoded(registryIface, "CompositePolicyUpdated", [newId, caller, [allow, block]], POLICY_REGISTRY, 1012, 1),
     encoded(tokenIface, "Seized", [caller, holder, treasury, 1n], token, 1013, 2),
+    encoded(tokenIface, "Transfer", [zero, treasury, 1250000n], token, 1024, 0),
+    encoded(tokenIface, "Transfer", [treasury, holder, 500000n], token, 1025, 0),
   ];
   let registryCalls = 0, seizeCalls = 0, splits = 0;
   const rpc = http.createServer(async (req, res) => {
@@ -166,7 +179,8 @@ test("real indexer backfills separate Registry and Seized streams through JSON-R
     for await (const part of req) text += part;
     const call = JSON.parse(text);
     let result;
-    if (call.method === "eth_blockNumber") result = ethers.toQuantity(1030);
+    if (call.method === "eth_chainId") result = ethers.toQuantity(8453);
+    else if (call.method === "eth_blockNumber") result = ethers.toQuantity(1030);
     else if (call.method === "eth_getBlockByNumber") {
       const bn = Number(call.params[0]);
       result = { number: ethers.toQuantity(bn), hash: ethers.ZeroHash, parentHash: ethers.ZeroHash,
@@ -181,7 +195,7 @@ test("real indexer backfills separate Registry and Seized streams through JSON-R
         res.end(JSON.stringify({ error: "Payload Too Large" }));
         return;
       }
-      if (filter.address) { assert.equal(filter.address.toLowerCase(), POLICY_REGISTRY.toLowerCase()); registryCalls++; }
+      if (filter.address && filter.address.toLowerCase() !== FACTORY.toLowerCase()) { assert.equal(filter.address.toLowerCase(), POLICY_REGISTRY.toLowerCase()); registryCalls++; }
       else seizeCalls++;
       const topics = Array.isArray(filter.topics[0]) ? filter.topics[0] : [filter.topics[0]];
       result = logs.filter((log) => log.blockNumber >= from && log.blockNumber <= to && topics.includes(log.topics[0]))
@@ -195,7 +209,7 @@ test("real indexer backfills separate Registry and Seized streams through JSON-R
   try {
     const child = spawn(process.execPath, ["indexer.js", "--cobalt-backfill"], {
       cwd: path.resolve(__dirname, ".."),
-      env: { ...process.env, DB_PATH: dbPath, RPC_URL: `http://127.0.0.1:${rpc.address().port}`, START_BLOCK: "1000", COBALT_START_BLOCK: "1010", CONFIRMATIONS: "0", REGISTRY_CHUNK: "10", SEIZE_CHUNK: "10" },
+      env: { ...process.env, DB_PATH: dbPath, RPC_URL: `http://127.0.0.1:${rpc.address().port}`, RPC_FALLBACK_URLS: "", START_BLOCK: "1000", COBALT_START_BLOCK: "1010", CONFIRMATIONS: "0", REGISTRY_CHUNK: "10", SEIZE_CHUNK: "10" },
     });
     let output = "";
     child.stdout.on("data", (part) => output += part);
@@ -211,6 +225,25 @@ test("real indexer backfills separate Registry and Seized streams through JSON-R
     assert.equal(check.prepare("SELECT value FROM meta WHERE key='registry_cursor'").get().value, "1021");
     assert.equal(check.prepare("SELECT value FROM meta WHERE key='seize_cursor'").get().value, "1021");
     check.close();
+    // Full catch-up applies ordered Transfer batches exactly once, including
+    // the normal follower path rather than only the additive Cobalt stream.
+    const follower = spawn(process.execPath, ["indexer.js", "--once"], {
+      cwd: path.resolve(__dirname, ".."),
+      env: { ...process.env, DB_PATH: dbPath, RPC_URL: `http://127.0.0.1:${rpc.address().port}`,
+        RPC_FALLBACK_URLS: "", START_BLOCK: "1000", COBALT_START_BLOCK: "1010", CONFIRMATIONS: "0", TOKEN_TOPIC_CHUNK: "10" },
+    });
+    let followerOutput = "";
+    follower.stdout.on("data", part => followerOutput += part);
+    follower.stderr.on("data", part => followerOutput += part);
+    const followerTimer = setTimeout(() => follower.kill(), 15000);
+    const followerCode = await new Promise(resolve => follower.once("exit", resolve));
+    clearTimeout(followerTimer);
+    assert.equal(followerCode, 0, followerOutput);
+    const caughtUp = new Database(dbPath, { readonly: true });
+    assert.equal(caughtUp.prepare("SELECT total_supply FROM tokens WHERE address=?").get(token).total_supply, "9750000");
+    assert.equal(caughtUp.prepare("SELECT transfer_count FROM tokens WHERE address=?").get(token).transfer_count, 5);
+    assert.equal(caughtUp.prepare("SELECT value FROM meta WHERE key='token_cursor'").get().value, "1030");
+    caughtUp.close();
   } finally { await new Promise((resolve) => rpc.close(resolve)); await rm(dir, { recursive: true, force: true }); }
 });
 

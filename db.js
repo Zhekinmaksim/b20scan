@@ -140,16 +140,16 @@ const stmts = {
   setAdminActive: db.prepare("UPDATE tokens SET admin_active=? WHERE address=?"),
   currentAdminActive: db.prepare(`
     SELECT 1 active
-    FROM events ae
-    WHERE ae.token=? COLLATE NOCASE
+    FROM events ae INDEXED BY idx_events_token
+    WHERE ae.token=?
       AND ae.kind='RoleGranted'
       AND lower(json_extract(ae.args,'$.role')) IN (
         '0x0000000000000000000000000000000000000000000000000000000000000000',
         '0x1effbbff9c66c5e59634f24fe842750c60d18891155c32dd155fc2d661a4c86d'
       )
       AND NOT EXISTS (
-        SELECT 1 FROM events re
-        WHERE re.token=ae.token COLLATE NOCASE
+        SELECT 1 FROM events re INDEXED BY idx_events_token
+        WHERE re.token=ae.token
           AND re.kind='RoleRevoked'
           AND lower(json_extract(re.args,'$.role'))=lower(json_extract(ae.args,'$.role'))
           AND lower(json_extract(re.args,'$.account'))=lower(json_extract(ae.args,'$.account'))

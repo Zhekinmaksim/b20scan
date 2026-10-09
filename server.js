@@ -8,6 +8,8 @@ const { db, stmts } = require("./db.js");
 const { mountHistory, seizureCapability } = require("./history.js");
 const { policySnapshot } = require("./policy.js");
 const { PAUSE_FEATURES } = require("./chain.js");
+const { createRpcProvider } = require("./rpc.js");
+const { healthLag } = require("./health.js");
 
 const app = express();
 app.disable("x-powered-by");
@@ -81,11 +83,7 @@ app.use("/api", apiRateLimit, (req, res, next) => {
 });
 mountHistory(app, db);
 
-const provider = new ethers.JsonRpcProvider(process.env.RPC_URL || "https://mainnet.base.org", 8453, {
-  staticNetwork: ethers.Network.from(8453),
-  batchMaxCount: 1,
-  batchStallTime: 0,
-});
+const provider = createRpcProvider({ timeout: Number(process.env.RPC_WEB_TIMEOUT_MS || 1000) });
 const token = new ethers.Interface([
   "function name() view returns (string)",
   "function symbol() view returns (string)",
@@ -556,12 +554,16 @@ function localHealthMeta() {
   const factoryCursor = Number(stmts.getMeta.get("factory_cursor")?.value || stmts.getMeta.get("cursor")?.value || 0);
   const eventCursor = Number(stmts.getMeta.get("token_cursor")?.value || 0);
   const liveCursor = Number(stmts.getMeta.get("live_token_cursor")?.value || 0);
+  const registryCursor = Number(stmts.getMeta.get("registry_cursor")?.value || 0);
+  const seizeCursor = Number(stmts.getMeta.get("seize_cursor")?.value || 0);
   const cursor = Math.max(factoryCursor, eventCursor, liveCursor);
   const lastEvent = q.lastEvent.get();
   return {
     factoryCursor,
     eventCursor,
     liveCursor,
+    registryCursor,
+    seizeCursor,
     cursor,
     lastEventTs: lastEvent?.ts || null,
     lastEventBlock: lastEvent?.block || null,
@@ -574,11 +576,9 @@ app.get("/api/health", async (_, res) => {
   try {
     const chainHead = await withTimeout(provider.getBlockNumber(), 2_000);
     const local = localHealthMeta();
-    const lagBlocks = Math.max(0, chainHead - local.cursor);
     res.json({
-      status: lagBlocks <= 60 ? "synced" : lagBlocks <= 600 ? "catching_up" : "lagging",
+      ...healthLag(chainHead, local),
       chainHead,
-      lagBlocks,
       ...local,
     });
   } catch (e) {

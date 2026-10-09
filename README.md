@@ -37,8 +37,34 @@ lookups were enabled:
 the indexer and `.env.example`. Do not set it to `0`: that makes a fresh
 backfill scan hours of empty pre-activation history.
 
-Public RPCs cap getLogs ranges; CHUNK=2000 is safe for most. With a paid
-endpoint (Alchemy/QuickNode) raise CHUNK to 10000 for a much faster backfill.
+Public RPCs cap getLogs ranges and can throttle individual methods. The shared
+`rpc.js` transport uses `RPC_URL` plus comma-separated `RPC_FALLBACK_URLS`,
+checks chain ID, fails over on rate limits/timeouts, and limits concurrent
+requests. Successful backups remain preferred for that method. Oversized
+log requests split without advancing the cursor past an unsuccessful range.
+
+The free Base endpoints in `deploy/free-rpc.env` were selected from
+[Chainlist](https://chainlist.org/chain/8453) and verified for historical logs
+on October 9, 2026. They require no account, API key, or paid plan. Public
+availability is not guaranteed, which is why more than one endpoint is used.
+On a VPS, install that file as `/etc/b20scan-rpc.env` and install
+`deploy/free-rpc.conf` as a systemd drop-in for both services, then reload
+systemd and restart. This preserves the original environment file.
+
+`RPC_TIMEOUT_MS` bounds each upstream attempt (default 8000),
+`RPC_WEB_TIMEOUT_MS` gives interactive API reads a shorter deadline (1000),
+`RPC_COOLDOWN_MS` skips throttled endpoints (default 60000), and
+`RPC_CONCURRENCY` bounds in-flight requests (default 4). Credentials must not
+be committed. `EVENT_RANGES_PER_TICK` and `COBALT_RANGES_PER_TICK` control
+catch-up work per follower tick; logs and balances are applied in order.
+`/api/health` reports each stream's lag and uses the slowest stream for its
+overall status, so a caught-up deployment feed cannot hide incomplete balances
+or policy history.
+The indexer discards non-B20 emitters from topic-scoped responses before
+ethers formats logs. Registry requests remain separately address-scoped.
+Token-event ranges commit atomically as a batch, avoiding a disk sync for
+every individual transfer. Nested transfer transactions still preserve exact
+balances, supply, deduplication and event ordering.
 
 ## VPS deployment
 
