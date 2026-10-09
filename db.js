@@ -182,7 +182,7 @@ function markTokenEvent(event, args) {
 // Applies a Transfer to the holders table and total supply, in BigInt math.
 function applyTransfer(token, from, to, amount) {
   const amt = BigInt(amount);
-  if (from === to) {
+  if (amt === 0n || from === to) {
     stmts.bumpTransfers.run(token);
     return;
   }

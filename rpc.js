@@ -2,6 +2,15 @@
 // indexer for ethers' default five-minute retry window.
 const { ethers } = require('ethers');
 
+function matchesLogFilter(log, filter) {
+  const addresses = filter.address == null ? null : [filter.address].flat().map(a => a.toLowerCase());
+  if (addresses && !addresses.includes(String(log.address).toLowerCase())) return false;
+  const block = Number(log.blockNumber), from = Number(filter.fromBlock), to = Number(filter.toBlock);
+  if ((Number.isFinite(from) && block < from) || (Number.isFinite(to) && block > to) || log.removed) return false;
+  return (filter.topics || []).every((topic, i) => topic == null || [topic].flat()
+    .some(value => value == null || value.toLowerCase() === String(log.topics?.[i]).toLowerCase()));
+}
+
 function isLogRangeError(error) {
   const text = [error?.message, error?.shortMessage, error?.error?.message,
     error?.info?.error?.message, error?.info?.responseBody].filter(Boolean).join(' ');
@@ -92,6 +101,18 @@ function createRpcProvider({ url = process.env.RPC_URL || 'https://mainnet.base.
             fail(endpoint, method, `HTTP ${result.response.status}`);
             continue;
           }
+          if (method === 'eth_getLogs' && Array.isArray(result.json?.result)) {
+            const filter = payload.params?.[0] || {};
+            if (result.json.result.some(log => !matchesLogFilter(log, filter))) {
+              fail(endpoint, method, 'response violates log filter');
+              continue;
+            }
+            if (result.json.result.length >= 10000 && Number(filter.toBlock) > Number(filter.fromBlock)) {
+              return { statusCode: 200, statusMessage: 'OK', headers: {},
+                body: Buffer.from(JSON.stringify({ jsonrpc: '2.0', id: payload.id,
+                  error: { code: -32005, message: 'log response size exceeds safe result limit; split the range' } })) };
+            }
+          }
           // Reverts and invalid arguments are real RPC results, not outages.
           preferred.set(method, endpoint);
           let bytes = result.bytes;
@@ -119,4 +140,4 @@ function createRpcProvider({ url = process.env.RPC_URL || 'https://mainnet.base.
   });
 }
 
-module.exports = { createRpcProvider, isLogRangeError };
+module.exports = { createRpcProvider, isLogRangeError, matchesLogFilter };

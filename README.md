@@ -65,6 +65,21 @@ ethers formats logs. Registry requests remain separately address-scoped.
 Token-event ranges commit atomically as a batch, avoiding a disk sync for
 every individual transfer. Nested transfer transactions still preserve exact
 balances, supply, deduplication and event ordering.
+Confirmed live-cache Transfers are merged into each historical range before
+its cursor advances. RPC log responses are checked against emitter, topics
+and block bounds, and large result sets split conservatively.
+
+For an existing cache with confirmed Transfers left unapplied, stop the
+indexer and run `node repair-balances.js --from-block=N --dry-run`, then omit
+`--dry-run` to apply. `DB_PATH` must be set. Only affected tokens are rebuilt
+from their complete indexed ledger; inconsistent or negative ledgers abort.
+Old and reconstructed holder/token state is saved in `backups/` beside the
+database before a single atomic update. Raw event history is never deleted.
+For large histories, `repair-chain-balances.js --from-block=N` can instead
+read just affected participants and supply at the frozen confirmed cursor.
+It verifies the complete holder sum, stores rollback JSON, and updates only
+specific cached accounts and event markers. Both repair tools require the
+follower to be stopped. Zero-value Transfers count as events, not new holders.
 
 ## VPS deployment
 

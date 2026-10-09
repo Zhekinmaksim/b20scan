@@ -152,6 +152,15 @@ function insertDecodedTokenLog(log, timestamp, applyState) {
   }, d.args, Boolean(applyState));
 }
 
+function applyStoredTransfers(from, to) {
+  // Merge the confirmed live cache with the historical response. A provider
+  // returning fewer logs must not leave already-known Transfers unapplied.
+  const rows = db.prepare(`SELECT token,kind,block,tx,log_index,ts,args FROM events
+    INDEXED BY idx_events_block_log WHERE block BETWEEN ? AND ? AND kind='Transfer' AND applied=0
+    ORDER BY block,log_index`).all(from, to);
+  for (const row of rows) insertEventAndMaybeApply(row, JSON.parse(row.args), true);
+}
+
 async function getAddressScopedLogs(addresses, topics, from, to) {
   try {
     return await provider.getLogs({ address: addresses, topics, fromBlock: from, toBlock: to });
@@ -209,8 +218,9 @@ async function indexTokenRange(from, to, opts = {}) {
       return db.transaction(() => {
         for (const log of logs) {
           if (!isKnownB20Emitter(log.address, tokens.set)) continue;
-          n += insertDecodedTokenLog(log, timestampFor(log.blockNumber), applyState);
+          n += insertDecodedTokenLog(log, timestampFor(log.blockNumber), false);
         }
+        if (applyState) applyStoredTransfers(from, to);
         return n;
       })();
     } catch (e) {
@@ -228,9 +238,10 @@ async function indexTokenRange(from, to, opts = {}) {
     const batch = addrs.slice(i, i + TOKEN_ADDRESS_CHUNK);
     const logs = await getAddressScopedLogs(batch, [TOKEN_TOPICS], from, to);
     db.transaction(() => {
-      for (const log of logs) n += insertDecodedTokenLog(log, timestampFor(log.blockNumber), applyState);
+      for (const log of logs) n += insertDecodedTokenLog(log, timestampFor(log.blockNumber), false);
     })();
   }
+  if (applyState) db.transaction(() => applyStoredTransfers(from, to))();
   return n;
 }
 
@@ -268,6 +279,7 @@ async function indexSeizeRange(from, to) {
   let count = 0;
   for (const log of logs) {
     if (!isKnownB20Emitter(log.address, tokens.set)) continue;
+    if (decodeTokenLog(log)?.kind !== 'Seized') continue;
     // Transfer already updates balances. Seized is evidence of the operation,
     // never a second balance change or a supply burn.
     count += await insertDecodedTokenLog(log, await blockTs(log.blockNumber), false);

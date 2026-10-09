@@ -158,6 +158,13 @@ test("issuer admin materialization uses canonical token events across grant, rev
   assert.equal(state(), 1);
 });
 
+test("zero-value memo Transfers count as activity without creating holders", () => {
+  const account='0x00000000000000000000000000000000000000d4';
+  add('Transfer',[zero,account,0n],903,0,other);
+  assert.equal(db.prepare('SELECT holder_count FROM tokens WHERE address=?').get(other).holder_count,0);
+  assert.equal(db.prepare('SELECT count(*) n FROM holders WHERE token=?').get(other).n,0);
+});
+
 test("real indexer backfills separate Registry and Seized streams through JSON-RPC", async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "b20scan-cobalt-test-"));
   const dbPath = path.join(dir, "test.db");
@@ -225,6 +232,11 @@ test("real indexer backfills separate Registry and Seized streams through JSON-R
     assert.equal(check.prepare("SELECT value FROM meta WHERE key='registry_cursor'").get().value, "1021");
     assert.equal(check.prepare("SELECT value FROM meta WHERE key='seize_cursor'").get().value, "1021");
     check.close();
+    const liveCache = new Database(dbPath);
+    liveCache.prepare(`INSERT INTO events(token,kind,block,tx,log_index,ts,args,applied)
+      VALUES(?,?,?,?,?,?,?,0)`).run(token,'Transfer',1026,ethers.id('cached-live-transfer'),4,1700001026,
+      JSON.stringify({from:zero,to:holder,amount:'500000'}));
+    liveCache.close();
     // Full catch-up applies ordered Transfer batches exactly once, including
     // the normal follower path rather than only the additive Cobalt stream.
     const follower = spawn(process.execPath, ["indexer.js", "--once"], {
@@ -240,8 +252,9 @@ test("real indexer backfills separate Registry and Seized streams through JSON-R
     clearTimeout(followerTimer);
     assert.equal(followerCode, 0, followerOutput);
     const caughtUp = new Database(dbPath, { readonly: true });
-    assert.equal(caughtUp.prepare("SELECT total_supply FROM tokens WHERE address=?").get(token).total_supply, "9750000");
-    assert.equal(caughtUp.prepare("SELECT transfer_count FROM tokens WHERE address=?").get(token).transfer_count, 5);
+    assert.equal(caughtUp.prepare("SELECT total_supply FROM tokens WHERE address=?").get(token).total_supply, "10250000");
+    assert.equal(caughtUp.prepare("SELECT transfer_count FROM tokens WHERE address=?").get(token).transfer_count, 6);
+    assert.equal(caughtUp.prepare("SELECT count(*) n FROM events WHERE applied=0 AND kind='Transfer' AND block<=1030").get().n,0);
     assert.equal(caughtUp.prepare("SELECT value FROM meta WHERE key='token_cursor'").get().value, "1030");
     caughtUp.close();
   } finally { await new Promise((resolve) => rpc.close(resolve)); await rm(dir, { recursive: true, force: true }); }

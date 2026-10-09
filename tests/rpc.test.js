@@ -99,12 +99,22 @@ test('raw log prefix filtering preserves B20 logs and leaves address-scoped regi
     .map((address, i) => ({ address, blockHash: zeroHash, blockNumber: '0xa',
       transactionHash: zeroHash, transactionIndex: '0x0', logIndex: '0x' + i,
       removed: false, topics: [], data: '0x' }));
-  const endpoint = await fixture(t, (_, reply) => reply(logs));
+  const endpoint = await fixture(t, (payload, reply) => reply(payload.params?.[0]?.address
+    ? logs.filter(log => log.address === payload.params[0].address) : logs));
   const p = provider(t, endpoint, [], { logAddressPrefix: '0xb200' });
   const tokenLogs = await p.getLogs({ fromBlock: 10, toBlock: 10 });
   assert.equal(tokenLogs.length, 1);
   assert.equal(tokenLogs[0].address.toLowerCase(), logs[0].address);
-  assert.equal((await p.getLogs({ address: logs[1].address, fromBlock: 10, toBlock: 10 })).length, 2);
+  assert.equal((await p.getLogs({ address: logs[1].address, fromBlock: 10, toBlock: 10 }))[0].address.toLowerCase(), logs[1].address);
+});
+
+test('log responses must match emitter, topic and block range', () => {
+  const { matchesLogFilter } = require('../rpc.js');
+  const log = { address: '0xabc', blockNumber: '0xa', topics: ['0x11'], removed: false };
+  assert.equal(matchesLogFilter(log, { address: '0xABC', fromBlock: '0x9', toBlock: '0xb', topics: [['0x11','0x22']] }), true);
+  assert.equal(matchesLogFilter(log, { topics: ['0x22'] }), false);
+  assert.equal(matchesLogFilter(log, { fromBlock: '0xb' }), false);
+  assert.equal(matchesLogFilter(log, { address: '0xdef' }), false);
 });
 
 test('contract reverts are not treated as an upstream outage', async t => {
